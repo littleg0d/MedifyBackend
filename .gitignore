@@ -10,7 +10,7 @@ pom.xml.next
 release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
-
+,.
 # Logs
 *.log
 logs/
@@ -24,6 +24,8 @@ logs/
 
 # IDE files (VSCode)
 .vscode/
+.idea/
+src/main/resources
 
 # OS files
 .DS_Store

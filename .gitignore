@@ -12,6 +12,10 @@ release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
 
+
+.idea/
+.mvn/
+src/test
 # Logs
 *.log
 logs/

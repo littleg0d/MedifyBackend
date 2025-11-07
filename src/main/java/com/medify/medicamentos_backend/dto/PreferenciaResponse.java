@@ -1,4 +1,4 @@
-package com.tuapp.medicamentos.dto;
+package com.medify.medicamentos_backend.dto;
 
 public class PreferenciaResponse {
     private String paymentUrl;

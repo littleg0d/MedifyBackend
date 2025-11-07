@@ -1,17 +1,34 @@
-package com.tuapp.medicamentos.service;
+package com.medify.medicamentos_backend.service;
 
-import com.tuapp.medicamentos.dto.PreferenciaRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mercadopago.MercadoPagoConfig;
+import com.mercadopago.client.payment.PaymentClient;
+import com.mercadopago.client.preference.*;
+import com.mercadopago.exceptions.MPApiException;
+import com.mercadopago.exceptions.MPException;
+import com.mercadopago.resources.payment.Payment;
+import com.mercadopago.resources.preference.Preference;
+import com.medify.medicamentos_backend.dto.PreferenciaRequest;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
-import java.util.*;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class MercadoPagoService {
 
-    @Value("${mercadopago.access.token}")
+    private static final Logger log = LoggerFactory.getLogger(MercadoPagoService.class);
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${mercadopago.access.token:}")
     private String accessToken;
 
     @Value("${mercadopago.notification.url}")
@@ -26,138 +43,173 @@ public class MercadoPagoService {
     @Value("${mercadopago.pending.url}")
     private String pendingUrl;
 
-    private static final String MP_API_URL = "https://api.mercadopago.com/checkout/preferences";
-
-    public Map<String, Object> crearPreferencia(PreferenciaRequest request) {
-        try {
-            RestTemplate restTemplate = new RestTemplate();
-
-            // Headers
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(accessToken);
-
-            // Body de la preferencia
-            Map<String, Object> preference = new HashMap<>();
-
-            // Items
-            List<Map<String, Object>> items = new ArrayList<>();
-            Map<String, Object> item = new HashMap<>();
-
-            // Título del producto
-            item.put("title", request.getNombreComercial());
-            item.put("quantity", 1);
-            item.put("unit_price", request.getPrecio());
-            item.put("currency_id", "ARS");
-
-            // Descripción (opcional)
-            String descripcion = request.getDescripcion();
-            if (descripcion == null || descripcion.isEmpty()) {
-                descripcion = "Medicamento";
-                if (request.getFarmaciaNombre() != null) {
-                    descripcion += " - " + request.getFarmaciaNombre();
-                }
-            }
-            item.put("description", descripcion);
-
-            // Imagen del producto (opcional pero muy recomendado)
-            if (request.getImagenUrl() != null && !request.getImagenUrl().isEmpty()) {
-                item.put("picture_url", request.getImagenUrl());
-            }
-
-            // Categoría
-            item.put("category_id", "health");
-
-            items.add(item);
-            preference.put("items", items);
-
-            // Metadata para identificar el pedido
-            Map<String, String> metadata = new HashMap<>();
-            metadata.put("recetaId", request.getRecetaId());
-            if (request.getFarmaciaId() != null) {
-                metadata.put("farmaciaId", request.getFarmaciaId());
-            }
-            if (request.getFarmaciaNombre() != null) {
-                metadata.put("farmaciaNombre", request.getFarmaciaNombre());
-            }
-            preference.put("metadata", metadata);
-
-            // URLs de retorno
-            Map<String, String> backUrls = new HashMap<>();
-            backUrls.put("success", successUrl);
-            backUrls.put("failure", failureUrl);
-            backUrls.put("pending", pendingUrl);
-            preference.put("back_urls", backUrls);
-            preference.put("auto_return", "approved");
-
-            // URL de notificación (webhook)
-            preference.put("notification_url", notificationUrl);
-
-            // Configuración adicional
-            preference.put("statement_descriptor", "MEDICAMENTOS");
-            preference.put("external_reference", request.getRecetaId());
-
-            // Información del pagador (personalización)
-            Map<String, Object> payer = new HashMap<>();
-            payer.put("name", "Cliente");
-            payer.put("surname", "Farmacia");
-            preference.put("payer", payer);
-
-            // Configuración de visualización
-            preference.put("binary_mode", false);
-
-            // Métodos de pago
-            Map<String, Object> paymentMethods = new HashMap<>();
-            paymentMethods.put("installments", 12); // Hasta 12 cuotas
-            preference.put("payment_methods", paymentMethods);
-
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(preference, headers);
-
-            // Llamada a la API de Mercado Pago
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    MP_API_URL,
-                    entity,
-                    Map.class
-            );
-
-            if (response.getStatusCode() == HttpStatus.CREATED) {
-                Map<String, Object> responseBody = response.getBody();
-
-                Map<String, Object> result = new HashMap<>();
-                result.put("paymentUrl", responseBody.get("init_point"));
-                result.put("preferenceId", responseBody.get("id"));
-
-                return result;
-            } else {
-                throw new RuntimeException("Error al crear preferencia en Mercado Pago");
-            }
-
-        } catch (Exception e) {
-            throw new RuntimeException("Error al comunicarse con Mercado Pago: " + e.getMessage(), e);
+    @PostConstruct
+    public void init() {
+        // Configura el Access Token una sola vez al iniciar la aplicación si está presente
+        if (accessToken != null && !accessToken.isBlank()) {
+            MercadoPagoConfig.setAccessToken(accessToken);
+        } else {
+            // No hacemos set deltoken (en entornos de test/local puede estar ausente)
+            log.warn("[WARN] MERCADOPAGO_ACCESS_TOKEN no definido. Las llamadas a Mercado Pago fallarán si se intentan ejecutar.");
         }
     }
 
-    public Map<String, Object> verificarPago(String paymentId) {
-        try {
-            RestTemplate restTemplate = new RestTemplate();
+    // Indicador de modo de pruebas (tokens de prueba de Mercado Pago suelen empezar con "TEST-")
+    public boolean isTestMode() {
+        return accessToken != null && accessToken.startsWith("TEST-");
+    }
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(accessToken);
+    // Indica si el servicio tiene token configurado (útil para evitar llamadas cuando está vacío)
+    public boolean isConfigured() {
+        return accessToken != null && !accessToken.isBlank();
+    }
 
-            String url = "https://api.mercadopago.com/v1/payments/" + paymentId;
-            HttpEntity<String> entity = new HttpEntity<>(headers);
+    public Preference crearPreferencia(PreferenciaRequest request) throws MPException, MPApiException {
+        // Mantener por compatibilidad: usa recetaId como externalReference si no se proporciona otro.
+        return crearPreferencia(request, request.getRecetaId());
+    }
 
-            ResponseEntity<Map> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.GET,
-                    entity,
-                    Map.class
-            );
+    /**
+     * Crea una preferencia usando pedidoId como external_reference
+     */
+    public Preference crearPreferencia(PreferenciaRequest request, String pedidoId) throws MPException, MPApiException {
 
-            return response.getBody();
+        // 1. Crea el item
+        PreferenceItemRequest itemRequest = PreferenceItemRequest.builder()
+                .id(request.getRecetaId())
+                .title(request.getNombreComercial())
+                .description(request.getDescripcion())
+                .pictureUrl(request.getImagenUrl())
+                .categoryId("health")
+                .quantity(1)
+                .currencyId("ARS")
+                .unitPrice(new BigDecimal(request.getPrecio())) // Usa BigDecimal para dinero
+                .build();
 
-        } catch (Exception e) {
-            throw new RuntimeException("Error al verificar pago: " + e.getMessage(), e);
+        List<PreferenceItemRequest> items = new ArrayList<>();
+        items.add(itemRequest);
+
+        // 2. Crea las URLs de retorno
+        PreferenceBackUrlsRequest backUrls = PreferenceBackUrlsRequest.builder()
+                .success(successUrl)
+                .failure(failureUrl)
+                .pending(pendingUrl)
+                .build();
+
+        // 3. Metadata (para rastrear el pedido)
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("recetaId", request.getRecetaId());
+        metadata.put("pedidoId", pedidoId);
+        if (request.getFarmaciaId() != null) {
+            metadata.put("farmaciaId", request.getFarmaciaId());
         }
+
+        // 4. Crea la Preferencia completa
+        PreferenceRequest preferenceRequest = PreferenceRequest.builder()
+                .items(items)
+                .backUrls(backUrls)
+                // COMENTADO: autoReturn requiere que success URL esté definida y sea válida
+                // Si no tienes configurada mercadopago.success.url, comenta esta línea
+                // .autoReturn("approved")
+                .notificationUrl(notificationUrl)
+                .externalReference(pedidoId) // ID del pedido en Firestore
+                .metadata(metadata)
+                .build();
+
+        // 5. Crea el cliente y envía la petición con logging detallado en caso de error
+        PreferenceClient client = createPreferenceClient();
+        try {
+            // Log the outgoing payload at DEBUG level (safe: does not include secret token)
+            try {
+                if (log.isDebugEnabled()) {
+                    String prJson = objectMapper.writeValueAsString(preferenceRequest);
+                    log.debug("MercadoPago preference request payload: {}", prJson);
+                }
+            } catch (Exception e) {
+                log.debug("No se pudo serializar preferenceRequest para logging: {}", e.getMessage());
+            }
+
+            return client.create(preferenceRequest);
+        } catch (MPApiException mpEx) {
+            // Log detailed info about the API error if available
+            log.error("MercadoPago MPApiException creando preferencia (pedidoId={}): {}", pedidoId, mpEx.getMessage());
+
+            // Intentar extraer información adicional del objeto de la excepción (apiResponse) vía reflexión
+            try {
+                Object apiResponse = null;
+                try {
+                    java.lang.reflect.Method m = mpEx.getClass().getMethod("getApiResponse");
+                    apiResponse = m.invoke(mpEx);
+                } catch (NoSuchMethodException nsme) {
+                    // intentar campo 'apiResponse'
+                    try {
+                        java.lang.reflect.Field f = mpEx.getClass().getDeclaredField("apiResponse");
+                        f.setAccessible(true);
+                        apiResponse = f.get(mpEx);
+                    } catch (NoSuchFieldException | IllegalAccessException ignore) {
+                        // nothing
+                    }
+                }
+
+                if (apiResponse != null) {
+                    try {
+                        // Try to extract status code and body via common method names
+                        String statusStr = null;
+                        Object bodyObj = null;
+                        try {
+                            // common method names
+                            for (String methodName : new String[]{"getStatusCode","getStatus","getCode","statusCode"}) {
+                                try {
+                                    java.lang.reflect.Method ms = apiResponse.getClass().getMethod(methodName);
+                                    Object st = ms.invoke(apiResponse);
+                                    if (st != null) { statusStr = st.toString(); break; }
+                                } catch (NoSuchMethodException ignored) { }
+                            }
+
+                            for (String bodyMethod : new String[]{"getJsonElement","getBody","getResponse","getContent","getText","getData"}) {
+                                try {
+                                    java.lang.reflect.Method mb = apiResponse.getClass().getMethod(bodyMethod);
+                                    Object bo = mb.invoke(apiResponse);
+                                    if (bo != null) { bodyObj = bo; break; }
+                                } catch (NoSuchMethodException ignored) { }
+                            }
+                        } catch (Exception reflEx) {
+                            log.debug("No se pudo extraer status/body vía reflexión: {}", reflEx.getMessage());
+                        }
+
+                        String bodyStr = null;
+                        if (bodyObj != null) {
+                            try { bodyStr = objectMapper.writeValueAsString(bodyObj); } catch (Exception e) { bodyStr = bodyObj.toString(); }
+                        }
+
+                        log.error("Detalle apiResponse MercadoPago - status: {} body: {}", statusStr, bodyStr);
+                    } catch (Exception serEx) {
+                        log.error("Detalle apiResponse (toString): {}", apiResponse.toString());
+                    }
+                } else {
+                    log.error("No se pudo extraer apiResponse del MPApiException");
+                }
+            } catch (Exception ex) {
+                log.error("Error intentando extraer detalles de MPApiException: {}", ex.getMessage());
+            }
+
+            throw mpEx; // rethrow so controller handles cleanup and response
+        }
+    }
+
+    public Payment verificarPago(String paymentId) throws MPException, MPApiException {
+        // Verifica el pago usando el ID numérico
+        PaymentClient client = new PaymentClient();
+        return client.get(Long.valueOf(paymentId));
+    }
+
+    private boolean isValidHttpUrl(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase();
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+    // Allow tests to override or mock the client creation
+    protected PreferenceClient createPreferenceClient() {
+        return new PreferenceClient();
     }
 }

@@ -1,4 +1,4 @@
-package com.tuapp.medicamentos.config;
+package com.medify.medicamentos_backend.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,7 +17,9 @@ public class CorsConfig {
         CorsConfiguration config = new CorsConfiguration();
 
         config.setAllowCredentials(true);
-        config.setAllowedOriginPatterns(Arrays.asList("*"));
+        // (RECOMENDACIÓN) En producción, no uses "*", especifica tus dominios
+        // config.setAllowedOriginPatterns(Arrays.asList("*"));
+        config.setAllowedOrigins(Arrays.asList("http://localhost:3000", "http://localhost:8081", "https://tu-dominio-frontend.com"));
         config.setAllowedHeaders(Arrays.asList("*"));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
 

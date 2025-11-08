@@ -11,8 +11,9 @@ pom.xml.next
 release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
-
-
+.idea/
+idea/
+src/test/
 .idea/
 .mvn/
 src/test

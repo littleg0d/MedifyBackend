@@ -1,5 +1,4 @@
 package com.medify.medicamentos_backend.service;
-
 import com.dropbox.core.DbxException;
 import com.dropbox.core.DbxRequestConfig;
 import com.dropbox.core.v2.DbxClientV2;
@@ -12,13 +11,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
-import java.util.List;  // âœ… YA ESTÃ - CORRECTO
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class DropboxService {
@@ -40,7 +40,7 @@ public class DropboxService {
     @PostConstruct
     public void init() {
         if (accessToken == null || accessToken.isBlank()) {
-            log.warn("Dropbox access token no configurado. Las subidas de imÃ¡genes no funcionarÃ¡n.");
+            log.warn("Dropbox access token no configurado. Las subidas de imágenes no funcionarán.");
             return;
         }
 
@@ -48,12 +48,12 @@ public class DropboxService {
             DbxRequestConfig config = DbxRequestConfig.newBuilder("medify-backend").build();
             client = new DbxClientV2(config, accessToken);
 
-            // Test de conexiÃ³n
+            // Test de conexión
             client.users().getCurrentAccount();
             dropboxConfigured = true;
-            log.info("âœ… Dropbox configurado correctamente");
+            log.info("Dropbox configurado correctamente");
         } catch (DbxException e) {
-            log.error("âŒ Error inicializando Dropbox: {}", e.getMessage());
+            log.error("Error inicializando Dropbox: {}", e.getMessage());
         }
     }
 
@@ -62,13 +62,13 @@ public class DropboxService {
     }
 
     /**
-     * Sube una imagen a Dropbox y retorna el link pÃºblico
+     * Sube una imagen a Dropbox y retorna el link y el path
+     * @return Map con "url" y "path"
      */
-    public String subirImagen(MultipartFile file, String carpeta) throws IOException, DbxException {
+    public Map<String, String> subirImagen(MultipartFile file, String carpeta) throws IOException, DbxException {
 
         validarArchivo(file);
 
-        // Generar nombre Ãºnico
         String fileName = generarNombreUnico(file.getOriginalFilename());
         String dropboxPath = construirRuta(carpeta, fileName);
 
@@ -84,11 +84,16 @@ public class DropboxService {
             log.info("Imagen subida exitosamente: {}", metadata.getPathDisplay());
         }
 
-        // Obtener link pÃºblico
+        // Obtener link público
         String publicUrl = obtenerLinkPublico(dropboxPath);
-        log.info("Link pÃºblico generado: {}", publicUrl);
+        log.info("Link generado: {}", publicUrl);
 
-        return publicUrl;
+        // Retornar tanto la URL como el path
+        Map<String, String> resultado = new HashMap<>();
+        resultado.put("url", publicUrl);
+        resultado.put("path", dropboxPath);
+
+        return resultado;
     }
 
     /**
@@ -105,11 +110,11 @@ public class DropboxService {
      */
     private void validarArchivo(MultipartFile file) {
         if (file.isEmpty()) {
-            throw new IllegalArgumentException("El archivo estÃ¡ vacÃ­o");
+            throw new IllegalArgumentException("El archivo está vacío");
         }
 
         if (file.getSize() > 10 * 1024 * 1024) { // 10MB
-            throw new IllegalArgumentException("El archivo excede el tamaÃ±o mÃ¡ximo de 10MB");
+            throw new IllegalArgumentException("El archivo excede el tamaño máximo de 10MB");
         }
 
         String contentType = file.getContentType();
@@ -122,7 +127,7 @@ public class DropboxService {
     }
 
     /**
-     * Genera un nombre Ãºnico para el archivo
+     * Genera un nombre para el archivo
      */
     private String generarNombreUnico(String originalFilename) {
         String timestamp = LocalDateTime.now()
@@ -148,7 +153,7 @@ public class DropboxService {
     }
 
     /**
-     * Obtiene o crea un link pÃºblico para el archivo
+     * Obtiene o crea un link para el archivo
      */
     private String obtenerLinkPublico(String dropboxPath) throws DbxException {
         try {
@@ -171,7 +176,7 @@ public class DropboxService {
             return convertirALinkDirecto(sharedLink.getUrl());
 
         } catch (Exception e) {
-            log.error("Error obteniendo link pÃºblico: {}", e.getMessage());
+            log.error("Error obteniendo link: {}", e.getMessage());
             throw e;
         }
     }

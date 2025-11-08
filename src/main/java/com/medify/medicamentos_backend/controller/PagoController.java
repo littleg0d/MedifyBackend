@@ -5,6 +5,7 @@ import com.mercadopago.exceptions.MPException;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.preference.Preference;
 import com.medify.medicamentos_backend.dto.PreferenciaRequest;
+import com.medify.medicamentos_backend.security.WebhookSignatureValidator;
 import com.medify.medicamentos_backend.service.FirebaseService;
 import com.medify.medicamentos_backend.service.MercadoPagoService;
 import com.medify.medicamentos_backend.service.PagoProcessingService;
@@ -21,34 +22,35 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Controlador REST para la gestiÃ³n de pagos con MercadoPago
+ * Controlador REST para la gestión de pagos con MercadoPago
  */
 @RestController
 @RequestMapping("/api/pagos")
 public class PagoController {
 
     private static final Logger log = LoggerFactory.getLogger(PagoController.class);
+    private static final long WEBHOOK_MAX_AGE_SECONDS = 300; // 5 minutos
 
     private final MercadoPagoService mercadoPagoService;
     private final FirebaseService firebaseService;
     private final PagoProcessingService pagoProcessingService;
+    private final WebhookSignatureValidator signatureValidator;
 
     @Value("${mercadopago.failure.url:}")
     private String failureUrl;
 
     public PagoController(MercadoPagoService mercadoPagoService,
                           FirebaseService firebaseService,
-                          PagoProcessingService pagoProcessingService) {
+                          PagoProcessingService pagoProcessingService,
+                          WebhookSignatureValidator signatureValidator) {
         this.mercadoPagoService = mercadoPagoService;
         this.firebaseService = firebaseService;
         this.pagoProcessingService = pagoProcessingService;
+        this.signatureValidator = signatureValidator;
     }
 
     /**
      * Crea una preferencia de pago en MercadoPago
-     * 1. Valida configuraciÃ³n
-     * 2. Crea pedido en Firestore
-     * 3. Crea preferencia en MercadoPago
      */
     @PostMapping("/crear-preferencia")
     public ResponseEntity<?> crearPreferencia(@Valid @RequestBody PreferenciaRequest request) {
@@ -57,17 +59,14 @@ public class PagoController {
 
         String pedidoId = null;
         try {
-            // 1. Validar configuraciÃ³n ANTES de crear pedido
             if (!mercadoPagoService.isConfigured()) {
                 log.warn("Mercado Pago no configurado");
                 return handlePaymentError("Proveedor de pagos no configurado", HttpStatus.SERVICE_UNAVAILABLE);
             }
 
-            // 2. Crear pedido en Firestore
             pedidoId = firebaseService.crearPedido(request);
             log.info("Pedido creado con id: {}", pedidoId);
 
-            // 3. Crear preferencia en Mercado Pago
             Preference preferencia = mercadoPagoService.crearPreferencia(request, pedidoId);
 
             log.info("Preferencia creada: {} - URL: {}", preferencia.getId(), preferencia.getInitPoint());
@@ -92,15 +91,48 @@ public class PagoController {
 
     /**
      * Recibe notificaciones de MercadoPago sobre cambios en pagos
+     * Valida la firma criptográfica para asegurar autenticidad
      */
     @PostMapping("/webhook")
-    public ResponseEntity<String> webhook(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<String> webhook(
+            @RequestBody Map<String, Object> payload,
+            @RequestHeader(value = "x-signature", required = false) String xSignature,
+            @RequestHeader(value = "x-request-id", required = false) String xRequestId) {
 
         log.info("Webhook recibido: {}", payload);
+        log.debug("Headers - x-signature: {}, x-request-id: {}", xSignature, xRequestId);
 
         try {
+            // 1. Validar firma del webhook
+            if (signatureValidator.isConfigured()) {
+                String dataId = extractDataId(payload);
+
+                if (dataId == null) {
+                    log.error("Webhook sin data.id, rechazando");
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid_payload");
+                }
+
+                // Validar firma
+                if (!signatureValidator.isValidSignature(xSignature, xRequestId, dataId)) {
+                    log.error("Firma de webhook inválida, rechazando request");
+                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("invalid_signature");
+                }
+
+                // Validar timestamp (prevenir replay attacks)
+                if (!signatureValidator.isRecentTimestamp(xSignature, WEBHOOK_MAX_AGE_SECONDS)) {
+                    log.error("Webhook con timestamp expirado, rechazando");
+                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("expired_timestamp");
+                }
+
+                log.info("Firma de webhook validada correctamente para data.id: {}", dataId);
+            } else {
+                log.warn("Validación de firma deshabilitada (webhook.secret no configurado)");
+            }
+
+            // 2. Procesar webhook
             boolean procesado = pagoProcessingService.procesarWebhook(payload);
             return ResponseEntity.ok(procesado ? "processed" : "ignored");
+
         } catch (Exception ex) {
             log.error("Error procesando webhook: {}", ex.getMessage(), ex);
             // MercadoPago espera 200 incluso si hay errores para no reintentar
@@ -115,7 +147,7 @@ public class PagoController {
     public ResponseEntity<?> verificarPago(@PathVariable String paymentId) {
         if (paymentId == null || paymentId.isBlank()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Payment ID invÃ¡lido"));
+                    .body(Map.of("error", "Payment ID inválido"));
         }
 
         if (!mercadoPagoService.isConfigured()) {
@@ -143,16 +175,28 @@ public class PagoController {
         status.put("status", "OK");
         status.put("service", "API de pagos");
         status.put("mercadoPagoConfigured", String.valueOf(mercadoPagoService.isConfigured()));
+        status.put("webhookSignatureValidation", String.valueOf(signatureValidator.isConfigured()));
         return ResponseEntity.ok(status);
     }
 
-    // === MÃ©todos privados ===
+    // === Métodos privados ===
 
     /**
-     * Maneja errores de pago devolviendo JSON o redirigiendo segÃºn configuraciÃ³n
+     * Extrae el data.id del payload del webhook
+     */
+    private String extractDataId(Map<String, Object> payload) {
+        Object data = payload.get("data");
+        if (data instanceof Map) {
+            Object id = ((Map<?, ?>) data).get("id");
+            return id != null ? id.toString() : null;
+        }
+        return null;
+    }
+
+    /**
+     * Maneja errores de pago
      */
     private ResponseEntity<?> handlePaymentError(String message, HttpStatus status) {
-        // Si hay URL de fallo configurada, redirigir
         if (failureUrl != null && !failureUrl.isBlank()) {
             log.info("Redirigiendo a failure URL: {}", failureUrl);
             return ResponseEntity.status(HttpStatus.FOUND)
@@ -160,7 +204,6 @@ public class PagoController {
                     .build();
         }
 
-        // Si no, devolver error JSON
         Map<String, String> error = new HashMap<>();
         error.put("error", message);
         return ResponseEntity.status(status).body(error);

@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,15 +51,12 @@ public class MercadoPagoService {
     public void init() {
         if (accessToken != null && !accessToken.isBlank()) {
             MercadoPagoConfig.setAccessToken(accessToken);
-            log.info("MercadoPago configurado en modo: {}", isTestMode() ? "TEST" : "PRODUCCIÃ“N");
+            log.info("MercadoPago configurado");
         } else {
-            log.warn("MERCADOPAGO_ACCESS_TOKEN no definido. Las llamadas fallarÃ¡n.");
+            log.warn("MERCADOPAGO_ACCESS_TOKEN no definido.");
         }
     }
 
-    public boolean isTestMode() {
-        return accessToken != null && accessToken.startsWith("TEST-");
-    }
 
     public boolean isConfigured() {
         return accessToken != null && !accessToken.isBlank();
@@ -120,7 +116,7 @@ public class MercadoPagoService {
         return client.get(Long.valueOf(paymentId));
     }
 
-    // === MÃ©todos privados de logging ===
+    // === Metodos privados de logging ===
 
     private void logPreferenceRequest(PreferenceRequest request) {
         if (!log.isDebugEnabled()) {
@@ -139,7 +135,7 @@ public class MercadoPagoService {
         log.error("MPApiException creando preferencia (pedidoId={}): {}",
                 pedidoId, mpEx.getMessage());
 
-        // Intenta loggear detalles adicionales si estÃ¡n disponibles
+        // Intenta loggear detalles adicionales si estan disponibles
         try {
             int statusCode = mpEx.getStatusCode();
             log.error("Status code: {}", statusCode);

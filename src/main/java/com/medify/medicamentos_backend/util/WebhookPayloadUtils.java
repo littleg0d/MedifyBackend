@@ -3,8 +3,8 @@ package com.medify.medicamentos_backend.util;
 import java.util.Map;
 
 /**
- * Utilidades para extraer informaciÃ³n de payloads de webhooks
- */
+   Utilidades para extraer informacion de webhooks
+*/
 public class WebhookPayloadUtils {
 
     private WebhookPayloadUtils() {
@@ -12,7 +12,7 @@ public class WebhookPayloadUtils {
     }
 
     /**
-     * Extrae el payment ID del payload del webhook de MercadoPago
+        Extrae el payment ID del payload del webhook de MercadoPago
      */
     public static String extractPaymentId(Map<String, Object> payload) {
         Object data = payload.get("data");
@@ -24,7 +24,7 @@ public class WebhookPayloadUtils {
     }
 
     /**
-     * Extrae un valor String del mapa
+     Extrae un valor String del mapa
      */
     public static String extractString(Map<String, Object> map, String key) {
         Object value = map.get(key);

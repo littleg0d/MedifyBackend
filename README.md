@@ -1,136 +1,467 @@
-# Medicamentos Backend - API de Pagos
+# 📚 Documentación API Backend - Medify
 
-Este README resume los endpoints disponibles, el formato que espera el frontend, las posibles salidas/respuestas, la estructura del documento en Firestore y cómo configurar las credenciales de Mercado Pago y Firebase.
+## 🔐 Base URL
+```
+http://localhost:8080/api
+```
 
-## Endpoints
+---
 
-1) POST /api/pagos/crear-preferencia
-- Descripción: crea un pedido en Firestore y genera una preferencia de pago en Mercado Pago.
-- Content-Type: application/json
-- Request body (JSON) ejemplo:
+## 💳 Endpoints de Pagos
 
+### 1. Crear Preferencia de Pago
+
+Crea una preferencia de pago en MercadoPago y un pedido en Firestore.
+
+**Endpoint:** `POST /api/pagos/crear-preferencia`
+
+**Headers:**
+```
+Content-Type: application/json
+```
+
+**Body:**
 ```json
 {
-  "nombreComercial": "Farmacia La Salud",
-  "precio": 1700.00,
-  "recetaId": "xORTYX8WnkwGDgaD2oV",
-  "userId": "jdiDKUPyY0ZumjxrRWHZT0ORE0H3",
-  "farmaciaId": "farm_4",
-  "cotizacionId": "G5VsIFvt4U9QdljsqHOO",
-  "imagenUrl": "https://images.unsplash.com/158554357343-3b092031a891?w=400",
-  "descripcion": "Cotización de receta seleccionada",
+  "nombreComercial": "Ibuprofeno 600mg",
+  "precio": 1500.50,
+  "recetaId": "rec_123456",
+  "userId": "user_abc789",
+  "farmaciaId": "farm_xyz456",
   "direccion": {
-    "street": "Calle 64 277",
-    "city": "La Plata",
+    "street": "Av. Siempre Viva 742",
+    "city": "Buenos Aires",
     "province": "Buenos Aires",
-    "postalCode": "1900"
+    "postalCode": "1234"
+  },
+  "cotizacionId": "cot_opcional_123",
+  "imagenUrl": "https://ejemplo.com/imagen.jpg",
+  "descripcion": "Antiinflamatorio 600mg x 30 comprimidos"
+}
+```
+
+**Validaciones:**
+- `nombreComercial`: Requerido, no vacío
+- `precio`: Requerido, mayor a 0.01
+- `recetaId`: Requerido, no vacío
+- `userId`: Requerido, no vacío
+- `direccion`: Requerido, objeto Address válido
+- `farmaciaId`: Opcional
+- `cotizacionId`: Opcional
+- `imagenUrl`: Opcional, debe ser URL válida
+- `descripcion`: Opcional
+
+**Respuesta Exitosa (200 OK):**
+```json
+{
+  "paymentUrl": "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=123456789",
+  "preferenceId": "123456789-abc-def-ghi-123456789"
+}
+```
+
+**Errores:**
+- `503 Service Unavailable`: MercadoPago no configurado
+- `502 Bad Gateway`: Error de MercadoPago
+- `500 Internal Server Error`: Error interno
+- `400 Bad Request`: Validación fallida
+
+**Uso:**
+```javascript
+const response = await fetch('/api/pagos/crear-preferencia', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    nombreComercial: "Ibuprofeno 600mg",
+    precio: 1500.50,
+    recetaId: "rec_123",
+    userId: "user_abc",
+    farmaciaId: "farm_xyz",
+    direccion: {
+      street: "Av. Siempre Viva 742",
+      city: "Buenos Aires",
+      province: "Buenos Aires",
+      postalCode: "1234"
+    }
+  })
+});
+
+const { paymentUrl } = await response.json();
+window.location.href = paymentUrl; // Redirigir a MercadoPago
+```
+
+---
+
+### 2. Webhook de MercadoPago
+
+Recibe notificaciones automáticas de MercadoPago sobre cambios en pagos.
+
+**Endpoint:** `POST /api/pagos/webhook`
+
+⚠️ **Este endpoint es solo para MercadoPago, NO llamar desde el frontend**
+
+**Estados que maneja:**
+- `approved` → Pedido marcado como "pagado"
+- `rejected` → Pedido marcado como "rechazado"
+- `cancelled` → Pedido marcado como "cancelado"
+- `pending` / `in_process` → Pedido marcado como "pendiente"
+
+---
+
+### 3. Verificar Estado de Pago
+
+Verifica el estado actual de un pago en MercadoPago.
+
+**Endpoint:** `GET /api/pagos/verificar/{paymentId}`
+
+**Parámetros:**
+- `paymentId`: ID del pago de MercadoPago
+
+**Respuesta Exitosa (200 OK):**
+```json
+{
+  "id": 1234567890,
+  "status": "approved",
+  "status_detail": "accredited",
+  "transaction_amount": 1500.50,
+  "currency_id": "ARS",
+  "date_created": "2024-11-08T14:30:00.000-04:00",
+  "external_reference": "pedido_abc123",
+  "payer": {
+    "email": "usuario@example.com"
   }
 }
 ```
-- Campos validados por el backend:
-  - `nombreComercial` (string) - requerido
-  - `precio` (number) - requerido, >= 1
-  - `recetaId` (string) - requerido
-  - `userId` (string) - requerido
-  - `direccion` / `address` (objeto) - validado con campos obligatorios:
-    - `street` (string) - requerido
-    - `city` (string) - requerido
-    - `province` (string) - requerido
-    - `postalCode` (string) - requerido
-  - `imagenUrl` (string) - si se envia, debe ser URL válida
 
-- Flujo y respuestas:
-  1. El backend crea un documento en Firestore (colección `pedidos`) con `estado = "pendiente"` y `fechacreacion = serverTimestamp`. El campo anidado de dirección se guarda exactamente en Firestore con la clave `addressUser`.
-  2. Intenta crear una preferencia en Mercado Pago usando `external_reference = pedidoId`.
+**Errores:**
+- `400 Bad Request`: Payment ID inválido o no encontrado
+- `503 Service Unavailable`: MercadoPago no configurado
 
-  - Si la preferencia se crea correctamente:
-    - HTTP 200
-    - Body JSON: `{ "paymentUrl": "<url_de_pago>" }`
-    - El frontend debe abrir esa URL en WebView o navegador.
+**Uso:**
+```javascript
+const response = await fetch('/api/pagos/verificar/1234567890');
+const payment = await response.json();
+console.log(payment.status); // "approved", "rejected", etc.
+```
 
-  - Si Mercado Pago no está configurado (no hay `MERCADOPAGO_ACCESS_TOKEN`) o la creación falla:
-    - El backend BORRA el documento `pedidos/{pedidoId}` para no dejar pedidos huérfanos.
-    - Si existe la propiedad `mercadopago.failure.url` configurada, el backend responde con HTTP 302 (Location = failureUrl). Algunos clientes (navegadores) seguirán la redirección; desde móviles puede manejarse abriendo la URL de fallo.
-    - Si no hay `failureUrl`, el backend devuelve HTTP 503 (o 500) con JSON: `{ "error": "No se pudo crear la preferencia de pago", "detail": "mensaje interno" }`.
+---
 
-2) POST /api/pagos/webhook
-- Descripción: webhook para notificaciones de Mercado Pago.
-- Body: Mercado Pago postea el payload estándar. El backend:
-  - Extrae `payment.id` desde `payload.data.id` o usa el resourceId indicado.
-  - Consulta a Mercado Pago con el `paymentId` y verifica el estado.
-  - Si el pago está `approved` y el `external_reference` (pedidoId) está presente, actualiza el documento en Firestore:
-    - `estado = "pagado"`
-    - `fechaPago = serverTimestamp`
-    - `paymentId`, `paymentStatus` (opcional)
-  - Responde 200 OK siempre (no provocar reintentos automáticos en caso de errores internos).
+### 4. Health Check de Pagos
 
-3) GET /api/pagos/verificar/{paymentId}
-- Consulta manual al SDK de Mercado Pago para verificar el pago (usa `PaymentClient.get(paymentId)`).
-- Útil para debugging; responde con el objeto `Payment` retornado por el SDK.
+Verifica el estado del servicio de pagos.
 
-4) GET /api/pagos/health
-- Devuelve 200 OK y un texto simple para comprobar que la API está corriendo.
+**Endpoint:** `GET /api/pagos/health`
 
-
-## Estructura del documento en Firestore (colección `pedidos`)
-Ejemplo de documento creado por `crear-preferencia`:
-
+**Respuesta (200 OK):**
 ```json
 {
-  "recetaId": "xORTY...",
-  "farmaciaId": "farm_4",
-  "userId": "jdiDKU...",
-  "addressUser": {
-    "street": "Calle 64 277",
-    "city": "La Plata",
-    "province": "Buenos Aires",
-    "postalCode": "1900"
-  },
-  "precio": 1700.00,
-  "cotizacionId": "G5VsI...",
-  "nombreComercial": "Farmacia La Salud",
-  "imagenUrl": "https://images.unsplash.com/...",
-  "estado": "pendiente",
-  "fechacreacion": <serverTimestamp>,
-  "fechaPago": null
+  "status": "OK",
+  "service": "API de pagos",
+  "mercadoPagoConfigured": "true",
+  "webhookSignatureValidation": "true"
 }
 ```
 
-Observa: la clave del objeto dirección en Firestore es `addressUser` (tal como pediste).
+---
 
-## Validación
-- El backend usa Bean Validation (`jakarta.validation`) en `PreferenciaRequest` y en la clase `Address`:
-  - Si falta un campo obligatorio, la respuesta será HTTP 400 con detalles por campo (el GlobalExceptionHandler maneja `MethodArgumentNotValidException`).
-  - `imagenUrl` debe ser una URL válida si se envía.
+## 🖼️ Endpoints de Imágenes
 
-## Configuración necesaria (credenciales)
-- Mercado Pago
-  - Variable de entorno recomendada: `MERCADOPAGO_ACCESS_TOKEN`.
-  - Alternativa (no recomendado): colocar el token directamente en `src/main/resources/application.properties` como `mercadopago.access.token=...`.
+### 1. Subir Imagen
 
-- Firebase
-  - Opción A (recomendada para local): exportar variable de entorno `GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON de service account.
-    - Windows cmd.exe:
-      ```cmd
-      set GOOGLE_APPLICATION_CREDENTIALS=C:\ruta\a\firebasesdk.json
-      ```
-  - Opción B: establecer la propiedad `firebase.service.account.path` en `application.properties` con la ruta absoluta al JSON.
-  - Nota: la inicialización de Firebase en `FirebaseService` es tolerante: si no encuentra credenciales no fallará el arranque (solo mostrará advertencia), pero las operaciones hacia Firestore lanzarán excepciones en tiempo de ejecución.
+Sube una imagen a Dropbox y retorna la URL pública y el path.
 
-## Cómo ejecutar la API localmente (Windows cmd.exe)
-1. Configura las variables de entorno (ejemplo):
-```cmd
-set MERCADOPAGO_ACCESS_TOKEN=TEST-xxxxxxxxxxxxx
-set GOOGLE_APPLICATION_CREDENTIALS=C:\ruta\a\firebasesdk.json
+**Endpoint:** `POST /api/imagenes/subir`
+
+**Headers:**
 ```
-2. Ejecuta la aplicación:
-```cmd
-.\mvnw.cmd spring-boot:run
+Content-Type: multipart/form-data
 ```
-3. Prueba con Postman: POST a `http://localhost:8080/api/pagos/crear-preferencia` con JSON de ejemplo arriba.
 
-## Respuestas esperadas para el frontend (resumen rápido)
-- Éxito: 200 OK + `{ "paymentUrl": "..." }` (abrir URL de pago)
-- Error al crear preferencia (MP falla): 302 Redirect a `failureUrl` (si configurada) OR 503/500 + JSON de error si no hay `failureUrl`.
-- Error de validación: 400 Bad Request + JSON con errores por campo (ej: `{ "errors": { "direccion.street": "street es requerido" } }`).
+**Form Data:**
+- `file`: Archivo de imagen (requerido)
+- `carpeta`: Subcarpeta opcional dentro de `/medify/imagenes` (opcional)
 
+**Validaciones:**
+- Tipos permitidos: `image/jpeg`, `image/jpg`, `image/png`, `image/gif`, `image/webp`
+- Tamaño máximo: 10MB
+
+**Respuesta Exitosa (200 OK):**
+```json
+{
+  "url": "https://dl.dropboxusercontent.com/s/abc123/20241108_143025_123456.jpg?raw=1",
+  "path": "/medify/imagenes/20241108_143025_123456.jpg",
+  "fileName": "receta.jpg",
+  "size": "245632"
+}
+```
+
+**Errores:**
+- `400 Bad Request`: Validación fallida (archivo vacío, tipo no permitido, tamaño excedido)
+- `502 Bad Gateway`: Error de Dropbox
+- `503 Service Unavailable`: Dropbox no configurado
+- `500 Internal Server Error`: Error interno
+
+**Uso:**
+```javascript
+const formData = new FormData();
+formData.append('file', imageFile);
+formData.append('carpeta', 'recetas'); // Opcional
+
+const response = await fetch('/api/imagenes/subir', {
+  method: 'POST',
+  body: formData
+});
+
+const { url, path } = await response.json();
+
+// Guardar ambos valores:
+// - url: para mostrar la imagen
+// - path: para eliminarla después
+```
+
+---
+
+### 2. Eliminar Imagen
+
+Elimina una imagen de Dropbox usando su path.
+
+**Endpoint:** `DELETE /api/imagenes/eliminar`
+
+**Query Parameters:**
+- `path`: Path completo de la imagen en Dropbox (requerido)
+
+**Ejemplo:**
+```
+DELETE /api/imagenes/eliminar?path=/medify/imagenes/20241108_143025_123456.jpg
+```
+
+**Respuesta Exitosa (200 OK):**
+```json
+{
+  "message": "Imagen eliminada correctamente"
+}
+```
+
+**Errores:**
+- `400 Bad Request`: No se pudo eliminar la imagen
+- `503 Service Unavailable`: Dropbox no configurado
+
+**Uso:**
+```javascript
+const path = "/medify/imagenes/20241108_143025_123456.jpg";
+
+const response = await fetch(`/api/imagenes/eliminar?path=${encodeURIComponent(path)}`, {
+  method: 'DELETE'
+});
+
+const result = await response.json();
+console.log(result.message);
+```
+
+---
+
+### 3. Health Check de Imágenes
+
+Verifica el estado del servicio de almacenamiento.
+
+**Endpoint:** `GET /api/imagenes/health`
+
+**Respuesta (200 OK):**
+```json
+{
+  "status": "OK",
+  "service": "API de imágenes",
+  "dropboxConfigured": "true"
+}
+```
+
+---
+
+## 🔥 Integración con Firebase
+
+### Escuchar Estado del Pedido en Tiempo Real
+
+El frontend puede escuchar cambios en el estado del pedido directamente desde Firestore:
+
+```javascript
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from './firebase-config';
+
+function usePedidoStatus(pedidoId) {
+  useEffect(() => {
+    if (!pedidoId) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'pedidos', pedidoId),
+      (doc) => {
+        if (doc.exists()) {
+          const pedido = doc.data();
+          
+          console.log('Estado del pedido:', pedido.estado);
+          // Estados posibles: "pendiente", "pagado", "rechazado", "cancelado"
+          
+          switch (pedido.estado) {
+            case 'pagado':
+              // Redirigir a página de éxito
+              window.location.href = '/pago-exitoso';
+              break;
+              
+            case 'rechazado':
+            case 'cancelado':
+              // Redirigir a página de error
+              window.location.href = '/pago-fallido';
+              break;
+              
+            case 'pendiente':
+              // Mostrar mensaje de espera
+              console.log('Esperando confirmación del pago...');
+              break;
+          }
+        }
+      },
+      (error) => {
+        console.error('Error escuchando pedido:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [pedidoId]);
+}
+```
+
+### Estructura del Pedido en Firestore
+
+```javascript
+pedidos/{pedidoId}
+{
+  // Información básica
+  recetaId: "rec_123",
+  farmaciaId: "farm_456",
+  userId: "user_789",
+  nombreComercial: "Ibuprofeno 600mg",
+  precio: 1500.50,
+  cotizacionId: "cot_abc",
+  imagenUrl: "https://...",
+  
+  // Dirección de envío
+  addressUser: {
+    street: "Av. Siempre Viva 742",
+    city: "Buenos Aires",
+    province: "Buenos Aires",
+    postalCode: "1234"
+  },
+  
+  // Estado del pago
+  estado: "pendiente" | "pagado" | "rechazado" | "cancelado",
+  paymentId: "1234567890",
+  paymentStatus: "approved" | "rejected" | "cancelled" | "pending",
+  
+  // Timestamps
+  fechaCreacion: Timestamp,
+  fechaActualizacion: Timestamp,
+  fechaPago: Timestamp | null,
+  fechaRechazo: Timestamp | null,
+  fechaCancelacion: Timestamp | null
+}
+```
+
+---
+
+## 🔄 Flujo Completo de Pago
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant F as Frontend
+    participant B as Backend
+    participant MP as MercadoPago
+    participant FB as Firestore
+
+    U->>F: Confirma compra
+    F->>B: POST /crear-preferencia
+    B->>FB: Crea pedido (estado: pendiente)
+    B->>MP: Crea preferencia
+    MP-->>B: paymentUrl
+    B-->>F: paymentUrl + preferenceId
+    F->>MP: Redirige usuario
+    U->>MP: Completa pago
+    MP->>B: POST /webhook (payment)
+    B->>MP: GET /payment/{id}
+    MP-->>B: Payment data
+    B->>FB: Actualiza pedido (estado: pagado/rechazado/cancelado)
+    FB-->>F: onSnapshot detecta cambio
+    F->>U: Redirige según estado
+```
+
+---
+
+## 🔑 Variables de Entorno Necesarias
+
+```properties
+# MercadoPago
+mercadopago.access.token=YOUR_ACCESS_TOKEN
+mercadopago.notification.url=https://tu-dominio.com/api/pagos/webhook
+mercadopago.success.url=https://tu-dominio.com/pago-exitoso
+mercadopago.failure.url=https://tu-dominio.com/pago-fallido
+mercadopago.pending.url=https://tu-dominio.com/pago-pendiente
+webhook.secret=YOUR_WEBHOOK_SECRET
+
+# Dropbox
+dropbox.access.token=YOUR_DROPBOX_TOKEN
+dropbox.folder.path=/medify/imagenes
+
+# Firebase
+firebase.service.account.path=/path/to/serviceAccountKey.json
+```
+
+---
+
+## ⚠️ Notas Importantes
+
+### Pagos
+- **NO se puede reutilizar una preferencia de pago**. Si un pago falla, debes crear una nueva preferencia llamando nuevamente a `/crear-preferencia`.
+- El webhook actualiza automáticamente el estado en Firestore. El frontend solo debe escuchar los cambios.
+- Los estados `pendiente`, `in_process`, `in_mediation` se mapean a `"pendiente"`.
+
+### Imágenes
+- Siempre guarda tanto el `url` como el `path` al subir una imagen.
+- El `url` es para mostrar la imagen.
+- El `path` es para eliminarla después.
+- Las imágenes se nombran automáticamente con timestamp para evitar colisiones.
+
+### Seguridad
+- El webhook de MercadoPago valida la firma criptográfica si `webhook.secret` está configurado.
+- Hay rate limiting para evitar abuso (10 webhooks/minuto por payment).
+- Los webhooks duplicados se detectan y rechazan automáticamente.
+
+---
+
+## 🧪 Testing Rápido
+
+```bash
+# Health check de pagos
+curl http://localhost:8080/api/pagos/health
+
+# Health check de imágenes
+curl http://localhost:8080/api/imagenes/health
+
+# Crear preferencia (reemplaza los valores)
+curl -X POST http://localhost:8080/api/pagos/crear-preferencia \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombreComercial": "Test",
+    "precio": 100,
+    "recetaId": "test123",
+    "userId": "user123",
+    "direccion": {
+      "street": "Test 123",
+      "city": "CABA",
+      "province": "Buenos Aires",
+      "postalCode": "1234"
+    }
+  }'
+
+# Subir imagen
+curl -X POST http://localhost:8080/api/imagenes/subir \
+  -F "file=@/path/to/image.jpg" \
+  -F "carpeta=test"
+```

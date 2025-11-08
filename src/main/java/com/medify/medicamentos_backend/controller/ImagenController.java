@@ -25,11 +25,11 @@ public class ImagenController {
     }
 
     /**
-     * Sube una imagen a Dropbox y devuelve el link pÃºblico
+     * Sube una imagen a Dropbox y devuelve el link público y el path
      *
      * @param file Imagen a subir
      * @param carpeta (Opcional) Subcarpeta dentro de /medify/imagenes
-     * @return URL pÃºblica de la imagen
+     * @return URL pública de la imagen y path en Dropbox
      */
     @PostMapping("/subir")
     public ResponseEntity<Map<String, String>> subirImagen(
@@ -37,7 +37,7 @@ public class ImagenController {
             @RequestParam(value = "carpeta", required = false) String carpeta) {
 
         if (!dropboxService.isConfigured()) {
-            log.warn("Dropbox no estÃ¡ configurado");
+            log.warn("Dropbox no está configurado");
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(Map.of("error", "Servicio de almacenamiento no disponible"));
         }
@@ -47,17 +47,18 @@ public class ImagenController {
                     file.getOriginalFilename(),
                     file.getSize() / 1024);
 
-            String url = dropboxService.subirImagen(file, carpeta);
+            Map<String, String> resultado = dropboxService.subirImagen(file, carpeta);
 
             Map<String, String> response = new HashMap<>();
-            response.put("url", url);
+            response.put("url", resultado.get("url"));
+            response.put("path", resultado.get("path"));
             response.put("fileName", file.getOriginalFilename());
             response.put("size", String.valueOf(file.getSize()));
 
             return ResponseEntity.ok(response);
 
         } catch (IllegalArgumentException e) {
-            log.warn("ValidaciÃ³n fallida: {}", e.getMessage());
+            log.warn("Validación fallida: {}", e.getMessage());
             return ResponseEntity.badRequest()
                     .body(Map.of("error", e.getMessage()));
 
@@ -100,7 +101,7 @@ public class ImagenController {
     public ResponseEntity<Map<String, String>> health() {
         Map<String, String> status = new HashMap<>();
         status.put("status", "OK");
-        status.put("service", "API de imÃ¡genes");
+        status.put("service", "API de imágenes");
         status.put("dropboxConfigured", String.valueOf(dropboxService.isConfigured()));
         return ResponseEntity.ok(status);
     }

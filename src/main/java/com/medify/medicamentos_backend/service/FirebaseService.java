@@ -3,9 +3,9 @@ package com.medify.medicamentos_backend.service;
 import com.google.api.core.ApiFuture;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.firestore.DocumentReference;
+import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
-import com.google.cloud.firestore.WriteResult;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.cloud.FirestoreClient;
@@ -70,7 +70,7 @@ public class FirebaseService {
 
     private Firestore getFirestore() {
         if (!firebaseInitialized) {
-            throw new IllegalStateException("Firebase no estÃ¡ inicializado");
+            throw new IllegalStateException("Firebase no esta inicializado");
         }
         return FirestoreClient.getFirestore();
     }
@@ -89,7 +89,7 @@ public class FirebaseService {
             data.put("nombreComercial", req.getNombreComercial());
             data.put("imagenUrl", req.getImagenUrl());
             data.put("estado", "pendiente");
-            data.put("fechaCreacion", FieldValue.serverTimestamp()); // Corregido: camelCase
+            data.put("fechaCreacion", FieldValue.serverTimestamp());
             data.put("fechaPago", null);
 
             DocumentReference docRef = db.collection("pedidos").document();
@@ -129,7 +129,6 @@ public class FirebaseService {
         }
     }
 
-    // MÃ‰TODO FALTANTE
     public void marcarPedidoComoPagado(String pedidoId, String paymentId, String status) {
         try {
             Firestore db = getFirestore();
@@ -145,6 +144,65 @@ public class FirebaseService {
                     .get(FIRESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             log.info("Pedido {} marcado como pagado (paymentId: {})", pedidoId, paymentId);
+        } catch (Exception e) {
+            log.error("Error marcando pedido {} como pagado", pedidoId, e);
+            throw new RuntimeException("Error al marcar pedido como pagado", e);
+        }
+    }
+
+    /**
+     * Marca un pedido como pagado de forma idempotente usando transacciones
+     * @return true si se actualizó, false si ya estaba pagado
+     */
+    public boolean marcarPedidoComoPagadoIdempotente(String pedidoId, String paymentId, String status) {
+        try {
+            Firestore db = getFirestore();
+
+            // Usar transacción para verificar y actualizar atómicamente
+            Boolean updated = db.runTransaction(transaction -> {
+                DocumentReference pedidoRef = db.collection("pedidos").document(pedidoId);
+                DocumentSnapshot snapshot = transaction.get(pedidoRef).get(FIRESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+                if (!snapshot.exists()) {
+                    log.warn("Pedido {} no existe", pedidoId);
+                    return false;
+                }
+
+                String estadoActual = snapshot.getString("estado");
+                String paymentIdActual = snapshot.getString("paymentId");
+
+                // Si ya está pagado con el mismo paymentId, es idempotente
+                if ("pagado".equals(estadoActual) && paymentId.equals(paymentIdActual)) {
+                    log.info("Pedido {} ya estaba marcado como pagado con payment {}, operación idempotente",
+                            pedidoId, paymentId);
+                    return false;
+                }
+
+                // Si ya está pagado con otro paymentId, es un error
+                if ("pagado".equals(estadoActual)) {
+                    log.error("Pedido {} ya pagado con payment {}, intento duplicado con payment {}",
+                            pedidoId, paymentIdActual, paymentId);
+                    return false;
+                }
+
+                // Actualizar a pagado
+                Map<String, Object> updates = new HashMap<>();
+                updates.put("estado", "pagado");
+                updates.put("paymentId", paymentId);
+                updates.put("paymentStatus", status);
+                updates.put("fechaPago", FieldValue.serverTimestamp());
+
+                transaction.update(pedidoRef, updates);
+                return true;
+
+            }).get(FIRESTORE_TIMEOUT_SECONDS + 2, TimeUnit.SECONDS);
+
+            if (Boolean.TRUE.equals(updated)) {
+                log.info("Pedido {} marcado como pagado (paymentId: {})", pedidoId, paymentId);
+            }
+
+            return Boolean.TRUE.equals(updated);
+
         } catch (Exception e) {
             log.error("Error marcando pedido {} como pagado", pedidoId, e);
             throw new RuntimeException("Error al marcar pedido como pagado", e);

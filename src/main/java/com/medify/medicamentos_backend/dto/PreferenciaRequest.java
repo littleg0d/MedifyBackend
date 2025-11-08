@@ -22,20 +22,23 @@ public class PreferenciaRequest {
     @NotBlank(message = "El userId es requerido")
     private String userId;
 
+    @NotBlank(message = "El farmaciaId es requerido")
     private String farmaciaId;
 
-    @NotNull(message = "La dirección es requerida") // AGREGADO
+    @NotNull(message = "La dirección es requerida")
     @Valid
     @JsonAlias({"address", "direccion", "addressUser"})
     private Address direccion;
 
+    @NotBlank(message = "El cotizacionId es requerido")
     private String cotizacionId;
 
+    @NotBlank(message = "La imagen URL es requerida")
     @JsonAlias({"imagenurl", "imagenUrl", "imageUrl"})
     @URL(message = "La URL de la imagen no es válida")
     private String imagenUrl;
 
-    private String descripcion;
+    private String descripcion; // ÚNICO CAMPO OPCIONAL
 
     // Constructores
     public PreferenciaRequest() {}

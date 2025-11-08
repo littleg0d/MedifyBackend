@@ -1,4 +1,4 @@
-# 📚 Documentación API Backend - Medify
+# 📚 Backend API Documentation - Medify
 
 ## 🔐 Base URL
 ```
@@ -7,11 +7,11 @@ http://localhost:8080/api
 
 ---
 
-## 💳 Endpoints de Pagos
+## 💳 Payment Endpoints
 
-### 1. Crear Preferencia de Pago
+### 1. Create Payment Preference
 
-Crea una preferencia de pago en MercadoPago y un pedido en Firestore.
+Creates a payment preference in MercadoPago and an order in Firestore.
 
 **Endpoint:** `POST /api/pagos/crear-preferencia`
 
@@ -23,35 +23,45 @@ Content-Type: application/json
 **Body:**
 ```json
 {
-  "nombreComercial": "Ibuprofeno 600mg",
-  "precio": 1500.50,
-  "recetaId": "rec_123456",
-  "userId": "user_abc789",
-  "farmaciaId": "farm_xyz456",
-  "direccion": {
-    "street": "Av. Siempre Viva 742",
-    "city": "Buenos Aires",
-    "province": "Buenos Aires",
-    "postalCode": "1234"
+  "nombreComercial": "Ibuprofen 600mg",         // ✅ REQUIRED
+  "precio": 1500.50,                            // ✅ REQUIRED (> 0.01)
+  "recetaId": "rec_123456",                     // ✅ REQUIRED
+  "userId": "user_abc789",                      // ✅ REQUIRED
+  "farmaciaId": "farm_xyz456",                  // ✅ REQUIRED
+  "cotizacionId": "cot_abc123",                 // ✅ REQUIRED
+  "imagenUrl": "https://example.com/image.jpg", // ✅ REQUIRED (must be valid URL)
+  "direccion": {                                // ✅ REQUIRED
+    "street": "742 Evergreen Terrace",          // ✅ REQUIRED
+    "city": "Buenos Aires",                     // ✅ REQUIRED
+    "province": "Buenos Aires",                 // ✅ REQUIRED
+    "postalCode": "1234"                        // ✅ REQUIRED
   },
-  "cotizacionId": "cot_opcional_123",
-  "imagenUrl": "https://ejemplo.com/imagen.jpg",
-  "descripcion": "Antiinflamatorio 600mg x 30 comprimidos"
+  "descripcion": "Anti-inflammatory 600mg"      // ⚪ OPTIONAL
 }
 ```
 
-**Validaciones:**
-- `nombreComercial`: Requerido, no vacío
-- `precio`: Requerido, mayor a 0.01
-- `recetaId`: Requerido, no vacío
-- `userId`: Requerido, no vacío
-- `direccion`: Requerido, objeto Address válido
-- `farmaciaId`: Opcional
-- `cotizacionId`: Opcional
-- `imagenUrl`: Opcional, debe ser URL válida
-- `descripcion`: Opcional
+**Required Fields:**
+| Field | Type | Validation |
+|-------|------|------------|
+| `nombreComercial` | String | Not empty |
+| `precio` | Double | Greater than 0.01 |
+| `recetaId` | String | Not empty |
+| `userId` | String | Not empty |
+| `farmaciaId` | String | Not empty |
+| `cotizacionId` | String | Not empty |
+| `imagenUrl` | String | Valid URL |
+| `direccion` | Object | Complete Address object |
+| `direccion.street` | String | Not empty |
+| `direccion.city` | String | Not empty |
+| `direccion.province` | String | Not empty |
+| `direccion.postalCode` | String | Not empty |
 
-**Respuesta Exitosa (200 OK):**
+**Optional Fields:**
+| Field | Type | Validation |
+|-------|------|------------|
+| `descripcion` | String | None |
+
+**Successful Response (200 OK):**
 ```json
 {
   "paymentUrl": "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=123456789",
@@ -59,64 +69,67 @@ Content-Type: application/json
 }
 ```
 
-**Errores:**
-- `503 Service Unavailable`: MercadoPago no configurado
-- `502 Bad Gateway`: Error de MercadoPago
-- `500 Internal Server Error`: Error interno
-- `400 Bad Request`: Validación fallida
+**Errors:**
+- `503 Service Unavailable`: MercadoPago not configured
+- `502 Bad Gateway`: MercadoPago error
+- `500 Internal Server Error`: Internal error
+- `400 Bad Request`: Validation failed
 
-**Uso:**
+**Usage:**
 ```javascript
 const response = await fetch('/api/pagos/crear-preferencia', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    nombreComercial: "Ibuprofeno 600mg",
+    nombreComercial: "Ibuprofen 600mg",
     precio: 1500.50,
     recetaId: "rec_123",
     userId: "user_abc",
     farmaciaId: "farm_xyz",
+    cotizacionId: "cot_abc",
+    imagenUrl: "https://example.com/image.jpg",
     direccion: {
-      street: "Av. Siempre Viva 742",
+      street: "742 Evergreen Terrace",
       city: "Buenos Aires",
       province: "Buenos Aires",
       postalCode: "1234"
-    }
+    },
+    descripcion: "Optional" // Only optional field
   })
 });
 
 const { paymentUrl } = await response.json();
-window.location.href = paymentUrl; // Redirigir a MercadoPago
+window.location.href = paymentUrl; // Redirect to MercadoPago
 ```
 
 ---
 
-### 2. Webhook de MercadoPago
+### 2. MercadoPago Webhook
 
-Recibe notificaciones automáticas de MercadoPago sobre cambios en pagos.
+Receives automatic notifications from MercadoPago about payment changes.
 
 **Endpoint:** `POST /api/pagos/webhook`
 
-⚠️ **Este endpoint es solo para MercadoPago, NO llamar desde el frontend**
+⚠️ **This endpoint is only for MercadoPago, DO NOT call from frontend**
 
-**Estados que maneja:**
-- `approved` → Pedido marcado como "pagado"
-- `rejected` → Pedido marcado como "rechazado"
-- `cancelled` → Pedido marcado como "cancelado"
-- `pending` / `in_process` → Pedido marcado como "pendiente"
+**States handled:**
+- `approved` → Order marked as "pagado" (paid)
+- `rejected` → Order marked as "rechazado" (rejected)
+- `cancelled` → Order marked as "cancelado" (cancelled)
+- `pending` / `in_process` → Order marked as "pendiente" (pending)
 
 ---
 
-### 3. Verificar Estado de Pago
+### 3. Verify Payment Status
 
-Verifica el estado actual de un pago en MercadoPago.
+Verifies the current status of a payment in MercadoPago.
 
 **Endpoint:** `GET /api/pagos/verificar/{paymentId}`
 
-**Parámetros:**
-- `paymentId`: ID del pago de MercadoPago
+**Parameters:**
+- `paymentId`: MercadoPago payment ID
 
-**Respuesta Exitosa (200 OK):**
+**Successful Response (200 OK):**
 ```json
 {
   "id": 1234567890,
@@ -127,16 +140,16 @@ Verifica el estado actual de un pago en MercadoPago.
   "date_created": "2024-11-08T14:30:00.000-04:00",
   "external_reference": "pedido_abc123",
   "payer": {
-    "email": "usuario@example.com"
+    "email": "user@example.com"
   }
 }
 ```
 
-**Errores:**
-- `400 Bad Request`: Payment ID inválido o no encontrado
-- `503 Service Unavailable`: MercadoPago no configurado
+**Errors:**
+- `400 Bad Request`: Invalid or not found payment ID
+- `503 Service Unavailable`: MercadoPago not configured
 
-**Uso:**
+**Usage:**
 ```javascript
 const response = await fetch('/api/pagos/verificar/1234567890');
 const payment = await response.json();
@@ -145,13 +158,13 @@ console.log(payment.status); // "approved", "rejected", etc.
 
 ---
 
-### 4. Health Check de Pagos
+### 4. Payment Health Check
 
-Verifica el estado del servicio de pagos.
+Verifies the payment service status.
 
 **Endpoint:** `GET /api/pagos/health`
 
-**Respuesta (200 OK):**
+**Response (200 OK):**
 ```json
 {
   "status": "OK",
@@ -163,11 +176,11 @@ Verifica el estado del servicio de pagos.
 
 ---
 
-## 🖼️ Endpoints de Imágenes
+## 🖼️ Image Endpoints
 
-### 1. Subir Imagen
+### 1. Upload Image
 
-Sube una imagen a Dropbox y retorna la URL pública y el path.
+Uploads an image to Dropbox and returns the public URL and path.
 
 **Endpoint:** `POST /api/imagenes/subir`
 
@@ -177,34 +190,34 @@ Content-Type: multipart/form-data
 ```
 
 **Form Data:**
-- `file`: Archivo de imagen (requerido)
-- `carpeta`: Subcarpeta opcional dentro de `/medify/imagenes` (opcional)
+- `file`: Image file (required)
+- `carpeta`: Optional subfolder within `/medify/imagenes` (optional)
 
-**Validaciones:**
-- Tipos permitidos: `image/jpeg`, `image/jpg`, `image/png`, `image/gif`, `image/webp`
-- Tamaño máximo: 10MB
+**Validations:**
+- Allowed types: `image/jpeg`, `image/jpg`, `image/png`, `image/gif`, `image/webp`
+- Maximum size: 10MB
 
-**Respuesta Exitosa (200 OK):**
+**Successful Response (200 OK):**
 ```json
 {
   "url": "https://dl.dropboxusercontent.com/s/abc123/20241108_143025_123456.jpg?raw=1",
   "path": "/medify/imagenes/20241108_143025_123456.jpg",
-  "fileName": "receta.jpg",
+  "fileName": "prescription.jpg",
   "size": "245632"
 }
 ```
 
-**Errores:**
-- `400 Bad Request`: Validación fallida (archivo vacío, tipo no permitido, tamaño excedido)
-- `502 Bad Gateway`: Error de Dropbox
-- `503 Service Unavailable`: Dropbox no configurado
-- `500 Internal Server Error`: Error interno
+**Errors:**
+- `400 Bad Request`: Validation failed (empty file, type not allowed, size exceeded)
+- `502 Bad Gateway`: Dropbox error
+- `503 Service Unavailable`: Dropbox not configured
+- `500 Internal Server Error`: Internal error
 
-**Uso:**
+**Usage:**
 ```javascript
 const formData = new FormData();
 formData.append('file', imageFile);
-formData.append('carpeta', 'recetas'); // Opcional
+formData.append('carpeta', 'prescriptions'); // Optional
 
 const response = await fetch('/api/imagenes/subir', {
   method: 'POST',
@@ -213,39 +226,39 @@ const response = await fetch('/api/imagenes/subir', {
 
 const { url, path } = await response.json();
 
-// Guardar ambos valores:
-// - url: para mostrar la imagen
-// - path: para eliminarla después
+// Save both values:
+// - url: to display the image
+// - path: to delete it later
 ```
 
 ---
 
-### 2. Eliminar Imagen
+### 2. Delete Image
 
-Elimina una imagen de Dropbox usando su path.
+Deletes an image from Dropbox using its path.
 
 **Endpoint:** `DELETE /api/imagenes/eliminar`
 
 **Query Parameters:**
-- `path`: Path completo de la imagen en Dropbox (requerido)
+- `path`: Full path of the image in Dropbox (required)
 
-**Ejemplo:**
+**Example:**
 ```
 DELETE /api/imagenes/eliminar?path=/medify/imagenes/20241108_143025_123456.jpg
 ```
 
-**Respuesta Exitosa (200 OK):**
+**Successful Response (200 OK):**
 ```json
 {
   "message": "Imagen eliminada correctamente"
 }
 ```
 
-**Errores:**
-- `400 Bad Request`: No se pudo eliminar la imagen
-- `503 Service Unavailable`: Dropbox no configurado
+**Errors:**
+- `400 Bad Request`: Could not delete the image
+- `503 Service Unavailable`: Dropbox not configured
 
-**Uso:**
+**Usage:**
 ```javascript
 const path = "/medify/imagenes/20241108_143025_123456.jpg";
 
@@ -259,13 +272,13 @@ console.log(result.message);
 
 ---
 
-### 3. Health Check de Imágenes
+### 3. Image Health Check
 
-Verifica el estado del servicio de almacenamiento.
+Verifies the storage service status.
 
 **Endpoint:** `GET /api/imagenes/health`
 
-**Respuesta (200 OK):**
+**Response (200 OK):**
 ```json
 {
   "status": "OK",
@@ -276,81 +289,81 @@ Verifica el estado del servicio de almacenamiento.
 
 ---
 
-## 🔥 Integración con Firebase
+## 🔥 Firebase Integration
 
-### Escuchar Estado del Pedido en Tiempo Real
+### Listen to Order Status in Real-Time
 
-El frontend puede escuchar cambios en el estado del pedido directamente desde Firestore:
+The frontend can listen to order status changes directly from Firestore:
 
 ```javascript
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase-config';
 
-function usePedidoStatus(pedidoId) {
+function useOrderStatus(orderId) {
   useEffect(() => {
-    if (!pedidoId) return;
+    if (!orderId) return;
 
     const unsubscribe = onSnapshot(
-      doc(db, 'pedidos', pedidoId),
+      doc(db, 'pedidos', orderId),
       (doc) => {
         if (doc.exists()) {
-          const pedido = doc.data();
+          const order = doc.data();
           
-          console.log('Estado del pedido:', pedido.estado);
-          // Estados posibles: "pendiente", "pagado", "rechazado", "cancelado"
+          console.log('Order status:', order.estado);
+          // Possible states: "pendiente", "pagado", "rechazado", "cancelado"
           
-          switch (pedido.estado) {
+          switch (order.estado) {
             case 'pagado':
-              // Redirigir a página de éxito
-              window.location.href = '/pago-exitoso';
+              // Redirect to success page
+              window.location.href = '/payment-success';
               break;
               
             case 'rechazado':
             case 'cancelado':
-              // Redirigir a página de error
-              window.location.href = '/pago-fallido';
+              // Redirect to error page
+              window.location.href = '/payment-failed';
               break;
               
             case 'pendiente':
-              // Mostrar mensaje de espera
-              console.log('Esperando confirmación del pago...');
+              // Show waiting message
+              console.log('Waiting for payment confirmation...');
               break;
           }
         }
       },
       (error) => {
-        console.error('Error escuchando pedido:', error);
+        console.error('Error listening to order:', error);
       }
     );
 
     return () => unsubscribe();
-  }, [pedidoId]);
+  }, [orderId]);
 }
 ```
 
-### Estructura del Pedido en Firestore
+### Order Structure in Firestore
 
 ```javascript
-pedidos/{pedidoId}
+pedidos/{orderId}
 {
-  // Información básica
+  // Basic information
   recetaId: "rec_123",
   farmaciaId: "farm_456",
   userId: "user_789",
-  nombreComercial: "Ibuprofeno 600mg",
+  nombreComercial: "Ibuprofen 600mg",
   precio: 1500.50,
   cotizacionId: "cot_abc",
   imagenUrl: "https://...",
   
-  // Dirección de envío
+  // Shipping address
   addressUser: {
-    street: "Av. Siempre Viva 742",
+    street: "742 Evergreen Terrace",
     city: "Buenos Aires",
     province: "Buenos Aires",
     postalCode: "1234"
   },
   
-  // Estado del pago
+  // Payment status
   estado: "pendiente" | "pagado" | "rechazado" | "cancelado",
   paymentId: "1234567890",
   paymentStatus: "approved" | "rejected" | "cancelled" | "pending",
@@ -366,43 +379,43 @@ pedidos/{pedidoId}
 
 ---
 
-## 🔄 Flujo Completo de Pago
+## 🔄 Complete Payment Flow
 
 ```mermaid
 sequenceDiagram
-    participant U as Usuario
+    participant U as User
     participant F as Frontend
     participant B as Backend
     participant MP as MercadoPago
     participant FB as Firestore
 
-    U->>F: Confirma compra
+    U->>F: Confirms purchase
     F->>B: POST /crear-preferencia
-    B->>FB: Crea pedido (estado: pendiente)
-    B->>MP: Crea preferencia
+    B->>FB: Creates order (estado: pendiente)
+    B->>MP: Creates preference
     MP-->>B: paymentUrl
     B-->>F: paymentUrl + preferenceId
-    F->>MP: Redirige usuario
-    U->>MP: Completa pago
+    F->>MP: Redirects user
+    U->>MP: Completes payment
     MP->>B: POST /webhook (payment)
     B->>MP: GET /payment/{id}
     MP-->>B: Payment data
-    B->>FB: Actualiza pedido (estado: pagado/rechazado/cancelado)
-    FB-->>F: onSnapshot detecta cambio
-    F->>U: Redirige según estado
+    B->>FB: Updates order (estado: pagado/rechazado/cancelado)
+    FB-->>F: onSnapshot detects change
+    F->>U: Redirects based on status
 ```
 
 ---
 
-## 🔑 Variables de Entorno Necesarias
+## 🔑 Required Environment Variables
 
 ```properties
 # MercadoPago
 mercadopago.access.token=YOUR_ACCESS_TOKEN
-mercadopago.notification.url=https://tu-dominio.com/api/pagos/webhook
-mercadopago.success.url=https://tu-dominio.com/pago-exitoso
-mercadopago.failure.url=https://tu-dominio.com/pago-fallido
-mercadopago.pending.url=https://tu-dominio.com/pago-pendiente
+mercadopago.notification.url=https://your-domain.com/api/pagos/webhook
+mercadopago.success.url=https://your-domain.com/payment-success
+mercadopago.failure.url=https://your-domain.com/payment-failed
+mercadopago.pending.url=https://your-domain.com/payment-pending
 webhook.secret=YOUR_WEBHOOK_SECRET
 
 # Dropbox
@@ -415,36 +428,36 @@ firebase.service.account.path=/path/to/serviceAccountKey.json
 
 ---
 
-## ⚠️ Notas Importantes
+## ⚠️ Important Notes
 
-### Pagos
-- **NO se puede reutilizar una preferencia de pago**. Si un pago falla, debes crear una nueva preferencia llamando nuevamente a `/crear-preferencia`.
-- El webhook actualiza automáticamente el estado en Firestore. El frontend solo debe escuchar los cambios.
-- Los estados `pendiente`, `in_process`, `in_mediation` se mapean a `"pendiente"`.
+### Payments
+- **You CANNOT reuse a payment preference**. If a payment fails, you must create a new preference by calling `/crear-preferencia` again.
+- The webhook automatically updates the status in Firestore. The frontend only needs to listen to changes.
+- The states `pendiente`, `in_process`, `in_mediation` are mapped to `"pendiente"`.
 
-### Imágenes
-- Siempre guarda tanto el `url` como el `path` al subir una imagen.
-- El `url` es para mostrar la imagen.
-- El `path` es para eliminarla después.
-- Las imágenes se nombran automáticamente con timestamp para evitar colisiones.
+### Images
+- Always save both the `url` and `path` when uploading an image.
+- The `url` is for displaying the image.
+- The `path` is for deleting it later.
+- Images are automatically named with timestamp to avoid collisions.
 
-### Seguridad
-- El webhook de MercadoPago valida la firma criptográfica si `webhook.secret` está configurado.
-- Hay rate limiting para evitar abuso (10 webhooks/minuto por payment).
-- Los webhooks duplicados se detectan y rechazan automáticamente.
+### Security
+- The MercadoPago webhook validates the cryptographic signature if `webhook.secret` is configured.
+- There is rate limiting to prevent abuse (10 webhooks/minute per payment).
+- Duplicate webhooks are detected and rejected automatically.
 
 ---
 
-## 🧪 Testing Rápido
+## 🧪 Quick Testing
 
 ```bash
-# Health check de pagos
+# Payment health check
 curl http://localhost:8080/api/pagos/health
 
-# Health check de imágenes
+# Image health check
 curl http://localhost:8080/api/imagenes/health
 
-# Crear preferencia (reemplaza los valores)
+# Create preference (replace values)
 curl -X POST http://localhost:8080/api/pagos/crear-preferencia \
   -H "Content-Type: application/json" \
   -d '{
@@ -452,6 +465,9 @@ curl -X POST http://localhost:8080/api/pagos/crear-preferencia \
     "precio": 100,
     "recetaId": "test123",
     "userId": "user123",
+    "farmaciaId": "farm123",
+    "cotizacionId": "cot123",
+    "imagenUrl": "https://example.com/image.jpg",
     "direccion": {
       "street": "Test 123",
       "city": "CABA",
@@ -460,8 +476,54 @@ curl -X POST http://localhost:8080/api/pagos/crear-preferencia \
     }
   }'
 
-# Subir imagen
+# Upload image
 curl -X POST http://localhost:8080/api/imagenes/subir \
   -F "file=@/path/to/image.jpg" \
   -F "carpeta=test"
+```
+
+---
+
+## 📖 Additional Resources
+
+### Payment Status Mapping
+
+| MercadoPago Status | Internal Order Status | Description |
+|-------------------|----------------------|-------------|
+| `approved` | `pagado` | Payment successfully processed |
+| `rejected` | `rechazado` | Payment rejected by bank/MP |
+| `cancelled` | `cancelado` | User cancelled the payment |
+| `pending` | `pendiente` | Payment awaiting confirmation |
+| `in_process` | `pendiente` | Payment being processed |
+| `in_mediation` | `pendiente` | Payment in dispute |
+
+### Retry Failed Payment
+
+If a payment was rejected or cancelled, you need to create a **NEW** preference:
+
+```javascript
+async function retryPayment(originalRecipe, address) {
+  // Create a NEW preference (new order)
+  const response = await fetch('/api/pagos/crear-preferencia', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      nombreComercial: originalRecipe.nombreComercial,
+      precio: originalRecipe.precio,
+      recetaId: originalRecipe.id,
+      userId: currentUser.uid,
+      farmaciaId: originalRecipe.farmaciaId,
+      cotizacionId: originalRecipe.cotizacionId,
+      imagenUrl: originalRecipe.imagenUrl,
+      direccion: address
+    })
+  });
+
+  const { paymentUrl } = await response.json();
+  
+  // This creates a NEW order in Firestore
+  // The previous order remains as historical with "rechazado" status
+  
+  window.location.href = paymentUrl;
+}
 ```

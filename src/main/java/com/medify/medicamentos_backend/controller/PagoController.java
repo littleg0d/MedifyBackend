@@ -7,10 +7,10 @@ import com.mercadopago.resources.preference.Preference;
 import com.medify.medicamentos_backend.dto.PreferenciaRequest;
 import com.medify.medicamentos_backend.service.FirebaseService;
 import com.medify.medicamentos_backend.service.MercadoPagoService;
+import com.medify.medicamentos_backend.service.PagoProcessingService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,152 +20,149 @@ import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Controlador REST para la gestiÃ³n de pagos con MercadoPago
+ */
 @RestController
 @RequestMapping("/api/pagos")
 public class PagoController {
+
     private static final Logger log = LoggerFactory.getLogger(PagoController.class);
 
-    @Autowired
-    private MercadoPagoService mercadoPagoService;
+    private final MercadoPagoService mercadoPagoService;
+    private final FirebaseService firebaseService;
+    private final PagoProcessingService pagoProcessingService;
 
-    @Autowired
-    private FirebaseService firebaseService;
-
-    // Inyectamos la URL de fallo para ser usada en caso de error y redirección
     @Value("${mercadopago.failure.url:}")
     private String failureUrl;
 
+    public PagoController(MercadoPagoService mercadoPagoService,
+                          FirebaseService firebaseService,
+                          PagoProcessingService pagoProcessingService) {
+        this.mercadoPagoService = mercadoPagoService;
+        this.firebaseService = firebaseService;
+        this.pagoProcessingService = pagoProcessingService;
+    }
+
+    /**
+     * Crea una preferencia de pago en MercadoPago
+     * 1. Valida configuraciÃ³n
+     * 2. Crea pedido en Firestore
+     * 3. Crea preferencia en MercadoPago
+     */
     @PostMapping("/crear-preferencia")
-    public ResponseEntity<Map<String, String>> crearPreferencia(
-            @Valid @RequestBody PreferenciaRequest request) throws Exception {
+    public ResponseEntity<?> crearPreferencia(@Valid @RequestBody PreferenciaRequest request) {
 
         log.info("Creando pedido en Firestore para receta: {}", request.getRecetaId());
 
-        // 1) Crear pedido en Firestore (estado 'pendiente', fechacreacion set en serverTimestamp)
-        String pedidoId = firebaseService.crearPedido(request);
-
-        log.info("Pedido creado en Firestore con id: {}. Creando preferencia en Mercado Pago...", pedidoId);
-
+        String pedidoId = null;
         try {
-
+            // 1. Validar configuraciÃ³n ANTES de crear pedido
             if (!mercadoPagoService.isConfigured()) {
-                log.warn("Mercado Pago no está configurado (token ausente). Eliminando pedido {} y devolviendo error/redirect.", pedidoId);
-                try {
-                    firebaseService.borrarPedido(pedidoId);
-                } catch (Exception ex) {
-                    log.error("Error borrando pedido {} cuando Mercado Pago no está configurado: {}", pedidoId, ex.getMessage(), ex);
-                }
-
-                if (failureUrl != null && !failureUrl.isBlank()) {
-                    return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(failureUrl)).build();
-                }
-
-                Map<String, String> err = new HashMap<>();
-                err.put("error", "Proveedor de pagos no configurado");
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(err);
+                log.warn("Mercado Pago no configurado");
+                return handlePaymentError("Proveedor de pagos no configurado", HttpStatus.SERVICE_UNAVAILABLE);
             }
 
-            // 2) Crear preferencia en Mercado Pago usando pedidoId como external_reference
-            Preference resultado = mercadoPagoService.crearPreferencia(request, pedidoId);
+            // 2. Crear pedido en Firestore
+            pedidoId = firebaseService.crearPedido(request);
+            log.info("Pedido creado con id: {}", pedidoId);
 
-            String paymentUrl = resultado.getInitPoint();
+            // 3. Crear preferencia en Mercado Pago
+            Preference preferencia = mercadoPagoService.crearPreferencia(request, pedidoId);
 
-            log.info("Preferencia creada con ID: {} y paymentUrl: {}", resultado.getId(), paymentUrl);
+            log.info("Preferencia creada: {} - URL: {}", preferencia.getId(), preferencia.getInitPoint());
 
-            Map<String, String> resp = new HashMap<>();
-            resp.put("paymentUrl", paymentUrl);
+            Map<String, String> response = new HashMap<>();
+            response.put("paymentUrl", preferencia.getInitPoint());
+            response.put("preferenceId", preferencia.getId());
 
-            return ResponseEntity.ok(resp);
+            return ResponseEntity.ok(response);
+
+        } catch (MPException | MPApiException e) {
+            log.error("Error de Mercado Pago para pedido {}: {}", pedidoId, e.getMessage(), e);
+            pagoProcessingService.limpiarPedido(pedidoId);
+            return handlePaymentError("Error creando preferencia de pago: " + e.getMessage(), HttpStatus.BAD_GATEWAY);
+
         } catch (Exception e) {
-            log.error("Error creando preferencia en Mercado Pago para pedido {}: {}", pedidoId, e.getMessage(), e);
-            try {
-                // Borrar el pedido si la creación de la preferencia falla
-                firebaseService.borrarPedido(pedidoId);
-                log.info("Pedido {} eliminado por error en creación de preferencia", pedidoId);
-            } catch (Exception ex) {
-                log.error("Error al eliminar pedido {} tras fallo en creación de preferencia: {}", pedidoId, ex.getMessage(), ex);
-            }
-
-            // Redirigir al cliente a la URL de fallo (si está configurada)
-            if (failureUrl != null && !failureUrl.isBlank()) {
-                log.info("Redirigiendo a URL de fallo: {}", failureUrl);
-                return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(failureUrl)).build();
-            }
-
-            Map<String, String> err = new HashMap<>();
-            err.put("error", "No se pudo crear la preferencia de pago");
-            err.put("detail", e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
+            log.error("Error inesperado creando preferencia para pedido {}: {}", pedidoId, e.getMessage(), e);
+            pagoProcessingService.limpiarPedido(pedidoId);
+            return handlePaymentError("Error interno al procesar el pago", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
+    /**
+     * Recibe notificaciones de MercadoPago sobre cambios en pagos
+     */
     @PostMapping("/webhook")
     public ResponseEntity<String> webhook(@RequestBody Map<String, Object> payload) {
 
-        log.info("Webhook recibido de Mercado Pago: {}", payload);
+        log.info("Webhook recibido: {}", payload);
 
         try {
-            Object typeObj = payload.get("type");
-            String type = typeObj != null ? typeObj.toString() : null;
-
-            if ("payment".equals(type)) {
-                // Extraer paymentId de forma segura
-                String paymentId = null;
-                Object dataObj = payload.get("data");
-                if (dataObj instanceof Map) {
-                    Map<?, ?> dataMap = (Map<?, ?>) dataObj;
-                    Object idObj = dataMap.get("id");
-                    if (idObj != null) {
-                        paymentId = idObj.toString();
-                      }
-                }
-
-                if (paymentId == null) {
-                    log.warn("Webhook 'payment' recibido pero no se encontró payment id en payload: {}", payload);
-                    return ResponseEntity.ok("ignored");
-                }
-
-                Payment pagoInfo = mercadoPagoService.verificarPago(paymentId);
-                String status = pagoInfo.getStatus() != null ? pagoInfo.getStatus().toString() : null;
-
-                log.info("Estado del pago {}: {}", paymentId, status);
-
-                // Obtener pedidoId desde external_reference o metadata de forma segura
-                String pedidoId = null;
-                if (pagoInfo.getExternalReference() != null) {
-                    pedidoId = pagoInfo.getExternalReference();
-                } else if (pagoInfo.getMetadata() != null && pagoInfo.getMetadata().get("pedidoId") != null) {
-                    pedidoId = pagoInfo.getMetadata().get("pedidoId").toString();
-                }
-
-                if (pedidoId != null && "approved".equalsIgnoreCase(status)) {
-                    try {
-                        firebaseService.marcarPedidoComoPagado(pedidoId, paymentId, status);
-                    } catch (Exception e) {
-                        log.error("Error al marcar pedido {} como pagado: {}", pedidoId, e.getMessage(), e);
-                    }
-                } else {
-                    log.info("No se procesó el pago en Firestore (pedidoId={} status={})", pedidoId, status);
-                }
-            }
+            boolean procesado = pagoProcessingService.procesarWebhook(payload);
+            return ResponseEntity.ok(procesado ? "processed" : "ignored");
         } catch (Exception ex) {
-            // No lanzar excepciones al webhook para no provocar reintentos automáticos indeseados
-            log.error("Error procesando webhook de Mercado Pago: {}", ex.getMessage(), ex);
+            log.error("Error procesando webhook: {}", ex.getMessage(), ex);
+            // MercadoPago espera 200 incluso si hay errores para no reintentar
+            return ResponseEntity.ok("error");
+        }
+    }
+
+    /**
+     * Verifica el estado de un pago por su ID
+     */
+    @GetMapping("/verificar/{paymentId}")
+    public ResponseEntity<?> verificarPago(@PathVariable String paymentId) {
+        if (paymentId == null || paymentId.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Payment ID invÃ¡lido"));
         }
 
-        return ResponseEntity.ok("OK");
+        if (!mercadoPagoService.isConfigured()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "Servicio de pagos no disponible"));
+        }
+
+        try {
+            log.info("Verificando pago: {}", paymentId);
+            Payment payment = mercadoPagoService.verificarPago(paymentId);
+            return ResponseEntity.ok(payment);
+        } catch (MPException | MPApiException e) {
+            log.error("Error verificando pago {}: {}", paymentId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", "No se pudo verificar el pago"));
+        }
     }
 
-    @GetMapping("/verificar/{paymentId}")
-    public ResponseEntity<Payment> verificarPago(@PathVariable String paymentId) throws MPException, MPApiException {
-        log.info("Verificando pago manualmente: {}", paymentId);
-        Payment pagoInfo = mercadoPagoService.verificarPago(paymentId);
-        return ResponseEntity.ok(pagoInfo);
-    }
-
+    /**
+     * Health check del servicio de pagos
+     */
     @GetMapping("/health")
-    public ResponseEntity<String> health() {
+    public ResponseEntity<Map<String, String>> health() {
+        Map<String, String> status = new HashMap<>();
+        status.put("status", "OK");
+        status.put("service", "API de pagos");
+        status.put("mercadoPagoConfigured", String.valueOf(mercadoPagoService.isConfigured()));
+        return ResponseEntity.ok(status);
+    }
 
-        return ResponseEntity.ok("API de pagos funcionando correctamente");
+    // === MÃ©todos privados ===
+
+    /**
+     * Maneja errores de pago devolviendo JSON o redirigiendo segÃºn configuraciÃ³n
+     */
+    private ResponseEntity<?> handlePaymentError(String message, HttpStatus status) {
+        // Si hay URL de fallo configurada, redirigir
+        if (failureUrl != null && !failureUrl.isBlank()) {
+            log.info("Redirigiendo a failure URL: {}", failureUrl);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(failureUrl))
+                    .build();
+        }
+
+        // Si no, devolver error JSON
+        Map<String, String> error = new HashMap<>();
+        error.put("error", message);
+        return ResponseEntity.status(status).body(error);
     }
 }

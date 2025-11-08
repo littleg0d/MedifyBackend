@@ -1,4 +1,4 @@
-package com.medify.medicamentos_backend.config;
+package com.medify.medicamentos_backend.exception;
 
 import com.dropbox.core.DbxException;
 import com.mercadopago.exceptions.MPApiException;

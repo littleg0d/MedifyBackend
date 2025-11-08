@@ -1,6 +1,5 @@
 package com.medify.medicamentos_backend.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotEmpty;
 
 public class Address {
@@ -58,4 +57,3 @@ public class Address {
         this.postalCode = postalCode;
     }
 }
-

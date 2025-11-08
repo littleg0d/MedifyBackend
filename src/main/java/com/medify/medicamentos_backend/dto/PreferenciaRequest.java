@@ -2,35 +2,36 @@ package com.medify.medicamentos_backend.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.hibernate.validator.constraints.URL;
 
 public class PreferenciaRequest {
 
-    @JsonAlias({"nombre"})
-    @NotEmpty(message = "El nombre comercial es requerido")
+    @NotBlank(message = "El nombre comercial es requerido")
     private String nombreComercial;
 
     @NotNull(message = "El precio es requerido")
-    @Min(value = 1, message = "El precio debe ser mayor a 0")
+    @DecimalMin(value = "0.01", message = "El precio debe ser mayor a 0")
     private Double precio;
 
-    @NotEmpty(message = "El ID de receta es requerido")
+    @NotBlank(message = "El ID de receta es requerido")
     private String recetaId;
 
-    @NotEmpty(message = "El userId es requerido")
+    @NotBlank(message = "El userId es requerido")
     private String userId;
 
     private String farmaciaId;
 
-    // Ahora la dirección es un objeto tipado para permitir validación
-    @JsonAlias({"address", "direccion"})
+    @NotNull(message = "La dirección es requerida") // AGREGADO
     @Valid
+    @JsonAlias({"address", "direccion", "addressUser"})
     private Address direccion;
+
     private String cotizacionId;
 
+    @JsonAlias({"imagenurl", "imagenUrl", "imageUrl"})
     @URL(message = "La URL de la imagen no es válida")
     private String imagenUrl;
 
@@ -86,7 +87,6 @@ public class PreferenciaRequest {
         this.farmaciaId = farmaciaId;
     }
 
-    // Dirección como objeto validado
     public Address getDireccion() {
         return direccion;
     }

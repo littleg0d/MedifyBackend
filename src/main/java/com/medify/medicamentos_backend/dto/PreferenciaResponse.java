@@ -11,7 +11,6 @@ public class PreferenciaResponse {
         this.paymentUrl = paymentUrl;
         this.preferenceId = preferenceId;
     }
-
     // Getters y Setters
     public String getPaymentUrl() {
         return paymentUrl;

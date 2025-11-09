@@ -40,6 +40,7 @@ public class PagoProcessingService {
      * @return true si se procesó correctamente, false si se ignoró
      */
     public boolean procesarWebhook(Map<String, Object> payload) {
+
         String type = WebhookPayloadUtils.extractString(payload, "type");
 
         if (!"payment".equals(type)) {
@@ -154,7 +155,7 @@ public class PagoProcessingService {
     }
 
     /**
-     * Limpia un pedido de Firestore (usado cuando falla la creación de preferencia)
+      Limpia un pedido de Firestore (usado cuando falla la creación de preferencia)
      */
     public void limpiarPedido(String pedidoId) {
         if (pedidoId == null) {

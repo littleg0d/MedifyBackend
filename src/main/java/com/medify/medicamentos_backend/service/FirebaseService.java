@@ -88,7 +88,8 @@ public class FirebaseService {
             data.put("cotizacionId", req.getCotizacionId());
             data.put("nombreComercial", req.getNombreComercial());
             data.put("imagenUrl", req.getImagenUrl());
-            data.put("estado", "pendiente");
+            // Estado inicial cuando se crea la orden para pago
+            data.put("estado", "pendiente_de_pago");
             data.put("fechaCreacion", FieldValue.serverTimestamp());
             data.put("fechaPago", null);
 
@@ -100,6 +101,101 @@ public class FirebaseService {
         } catch (Exception e) {
             log.error("Error creando pedido en Firestore", e);
             throw new RuntimeException("Error al crear pedido en Firestore", e);
+        }
+    }
+
+    /**
+     * Busca pedidos con estado 'pendiente_de_pago' más antiguos que los minutos indicados.
+     * Retorna los IDs de los documentos encontrados.
+     */
+    public java.util.List<String> buscarPedidosPendientesAntiguos(int minutes) {
+        // Calcular cutoff usando minutos
+        long cutoffSeconds = java.time.Instant.now()
+                .minus(java.time.Duration.ofMinutes(minutes))
+                .getEpochSecond();
+
+        com.google.cloud.Timestamp cutoff = com.google.cloud.Timestamp.ofTimeSecondsAndNanos(cutoffSeconds, 0);
+
+        try {
+            Firestore db = getFirestore();
+
+            var query = db.collection("pedidos")
+                    .whereEqualTo("estado", "pendiente_de_pago")
+                    .whereLessThan("fechaCreacion", cutoff);
+
+            var querySnapshot = query.get().get(FIRESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            java.util.List<String> ids = new java.util.ArrayList<>();
+            querySnapshot.getDocuments().forEach(doc -> ids.add(doc.getId()));
+
+            log.info("🔍 Encontrados {} pedidos pendientes de más de {} minutos", ids.size(), minutes);
+            return ids;
+
+        } catch (Exception e) {
+            // Si la excepción indica que hace falta un índice compuesto, hacemos un fallback.
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            log.warn("Consulta compuesta falló buscando pedidos pendientes antiguos: {}", msg);
+
+            // Intentar detectar URL sugerida para crear índice en el mensaje de error
+            try {
+                String text = msg;
+                int idx = text.indexOf("https://console.firebase.google.com/");
+                if (idx != -1) {
+                    int end = text.indexOf(' ', idx);
+                    String url = end == -1 ? text.substring(idx) : text.substring(idx, end);
+                    log.warn("Firestore requiere un índice para esta consulta. Puedes crear el índice aquí: {}", url);
+                }
+            } catch (Exception ignore) {
+                // no crítico
+            }
+
+            // Fallback: consultar por estado solamente y filtrar por fechaCreacion en el cliente.
+            try {
+                Firestore db2 = getFirestore();
+                var q = db2.collection("pedidos").whereEqualTo("estado", "pendiente_de_pago");
+                var snapshot = q.get().get(FIRESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+                java.util.List<String> ids = new java.util.ArrayList<>();
+                snapshot.getDocuments().forEach(doc -> {
+                    try {
+                        com.google.cloud.Timestamp ts = doc.getTimestamp("fechaCreacion");
+                        if (ts != null) {
+                            if (ts.toDate().toInstant().getEpochSecond() < cutoffSeconds) {
+                                ids.add(doc.getId());
+                            }
+                        } else {
+                            log.debug("Documento {} no tiene fechaCreacion, se ignora en cleanup", doc.getId());
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Error procesando doc {} en fallback: {}", doc.getId(), ex.getMessage());
+                    }
+                });
+
+                log.warn("Fallback aplicado: filtrado en cliente realizado. Se retornan {} pedidos.", ids.size());
+                return ids;
+            } catch (Exception ex2) {
+                log.error("Fallback también falló buscando pedidos pendientes antiguos", ex2);
+                throw new RuntimeException("Error buscando pedidos pendientes antiguos", ex2);
+            }
+        }
+    }
+
+    /**
+     * Marca un pedido como abandonado (abandonada) y registra fecha de actualización.
+     */
+    public void marcarPedidoAbandonado(String pedidoId) {
+        try {
+            Firestore db = getFirestore();
+            Map<String, Object> updates = new HashMap<>();
+            updates.put("estado", "abandonada");
+            updates.put("fechaCierre", FieldValue.serverTimestamp());
+            db.collection("pedidos").document(pedidoId)
+                    .update(updates)
+                    .get(FIRESTORE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            log.info("Pedido {} marcado como abandonado", pedidoId);
+        } catch (Exception e) {
+            log.error("Error marcando pedido {} como abandonado", pedidoId, e);
+            throw new RuntimeException("Error marcando pedido como abandonado", e);
         }
     }
 
@@ -191,8 +287,18 @@ public class FirebaseService {
                 updates.put("paymentId", paymentId);
                 updates.put("paymentStatus", status);
                 updates.put("fechaPago", FieldValue.serverTimestamp());
-
                 transaction.update(pedidoRef, updates);
+                // FINALIZAR LA RECETA
+                // recetaId para actualizar a finalizada.
+
+                String recetaId = snapshot.getString("recetaId");
+                // Solo si encontramos un recetaId en el pedido
+                if (recetaId != null && !recetaId.isBlank()) {
+                    DocumentReference recetaRef = db.collection("recetas").document(recetaId);
+                    // Actualizamos el estado de la receta para que no se pueda volver a cotizar/pagar
+                    transaction.update(recetaRef, "estado", "finalizada");
+                }
+
                 return true;
 
             }).get(FIRESTORE_TIMEOUT_SECONDS + 2, TimeUnit.SECONDS);

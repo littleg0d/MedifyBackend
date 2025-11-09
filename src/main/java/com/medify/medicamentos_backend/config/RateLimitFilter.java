@@ -54,6 +54,11 @@ public class RateLimitFilter implements Filter {
      * Determina si el path debe tener rate limiting
      */
     private boolean shouldRateLimit(String path) {
+        // Excluir explícitamente el webhook para evitar 429 en notificaciones entrantes
+        if (path.contains("/webhook")) {
+            return false;
+        }
+
         return path.startsWith("/api/pagos/") ||
                 path.startsWith("/api/imagenes/subir");
     }

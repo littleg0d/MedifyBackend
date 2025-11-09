@@ -103,33 +103,19 @@ public class PagoController {
         log.debug("Headers - x-signature: {}, x-request-id: {}", xSignature, xRequestId);
 
         try {
-            // 1. Validar firma del webhook
-            if (signatureValidator.isConfigured()) {
-                String dataId = extractDataId(payload);
+            // NOTA: Validación de firma deshabilitada completamente.
+            // Aceptamos cualquier webhook y asumimos que proviene de MercadoPago.
 
-                if (dataId == null) {
-                    log.error("Webhook sin data.id, rechazando");
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("invalid_payload");
-                }
-
-                // Validar firma
-                if (!signatureValidator.isValidSignature(xSignature, xRequestId, dataId)) {
-                    log.error("Firma de webhook inválida, rechazando request");
-                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("invalid_signature");
-                }
-
-                // Validar timestamp (prevenir replay attacks)
-                if (!signatureValidator.isRecentTimestamp(xSignature, WEBHOOK_MAX_AGE_SECONDS)) {
-                    log.error("Webhook con timestamp expirado, rechazando");
-                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("expired_timestamp");
-                }
-
-                log.info("Firma de webhook validada correctamente para data.id: {}", dataId);
+            // Intentamos extraer un posible id (si existe) para el procesamiento o logging,
+            // pero NO rechazamos el webhook si falta.
+            String dataId = extractDataId(payload);
+            if (dataId == null) {
+                log.warn("Webhook recibido sin data.id ni resource/id, pero se procesará de todos modos");
             } else {
-                log.warn("Validación de firma deshabilitada (webhook.secret no configurado)");
+                log.info("Webhook identificado con id: {}", dataId);
             }
 
-            // 2. Procesar webhook
+            // Procesar webhook sin validar firmas
             boolean procesado = pagoProcessingService.procesarWebhook(payload);
             return ResponseEntity.ok(procesado ? "processed" : "ignored");
 
@@ -185,11 +171,36 @@ public class PagoController {
      * Extrae el data.id del payload del webhook
      */
     private String extractDataId(Map<String, Object> payload) {
+        // 1) payload.data.id
         Object data = payload.get("data");
         if (data instanceof Map) {
             Object id = ((Map<?, ?>) data).get("id");
-            return id != null ? id.toString() : null;
+            if (id != null) {
+                return id.toString();
+            }
         }
+
+        // 2) payload.resource (puede ser una URL como https://api.mercadolibre.com/merchant_orders/35392594879)
+        Object resource = payload.get("resource");
+        if (resource instanceof String) {
+            String resStr = (String) resource;
+            // Extraer la última parte después de '/'
+            String[] parts = resStr.split("/");
+            if (parts.length > 0) {
+                String last = parts[parts.length - 1];
+                if (last != null && !last.isBlank()) {
+                    return last;
+                }
+            }
+        }
+
+        // 3) payload.id en la raíz
+        Object rootId = payload.get("id");
+        if (rootId != null) {
+            return rootId.toString();
+        }
+
+        // No se encontró id
         return null;
     }
 

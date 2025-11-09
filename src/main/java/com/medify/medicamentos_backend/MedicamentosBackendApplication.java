@@ -1,9 +1,11 @@
-                                                                                package com.medify.medicamentos_backend;
+package com.medify.medicamentos_backend;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
+@EnableScheduling
 public class MedicamentosBackendApplication {
 
     public static void main(String[] args) {

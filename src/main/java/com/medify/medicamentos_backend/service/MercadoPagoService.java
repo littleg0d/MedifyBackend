@@ -20,6 +20,8 @@ import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 
 @Service
 public class MercadoPagoService {
@@ -92,12 +94,16 @@ public class MercadoPagoService {
             metadata.put("farmaciaId", request.getFarmaciaId());
         }
 
+        // Establecer expiración 10 minutos a partir de ahora (UTC)
+        OffsetDateTime expiration = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10);
+
         PreferenceRequest preferenceRequest = PreferenceRequest.builder()
                 .items(List.of(item))
                 .backUrls(backUrls)
                 .notificationUrl(notificationUrl)
                 .externalReference(pedidoId)
                 .metadata(metadata)
+                .expirationDateTo(expiration)
                 .build();
 
         logPreferenceRequest(preferenceRequest);

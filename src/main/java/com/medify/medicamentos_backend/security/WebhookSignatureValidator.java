@@ -1,5 +1,7 @@
 package com.medify.medicamentos_backend.security;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -7,7 +9,6 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
@@ -46,8 +47,63 @@ public class WebhookSignatureValidator {
         // Cuando se reactive, el parámetro `dataId` debe ser el campo `data.id`
         // recibido en el payload del webhook y se usará en el template:
         // "id:[data.id];request-id:[x-request-id];ts:[ts];"
-        return true;
+        // return true;
+        // 1. Validar que la configuración y los datos existan
+        if (!isConfigured()) {
+            log.error("Validación de firma fallida: webhook.secret no está configurado.");
+            // Si no hay secret, no se puede validar.
+            return false;
+        }
+
+        if (xSignature == null || xSignature.isBlank() ||
+                xRequestId == null || xRequestId.isBlank() ||
+                dataId == null || dataId.isBlank()) {
+
+            log.warn("Validación de firma fallida: Faltan headers (x-signature, x-request-id) o dataId.");
+            return false;
+        }
+
+        try {
+            // 2. Parsear el header (equivale a signature.split(','))
+            // Esto ya lo hace tu método 'parseSignatureHeader'
+            Map<String, String> parts = parseSignatureHeader(xSignature);
+            String ts = parts.get("ts");       // 'valueOfTimestamp' en tu JS
+            String v1 = parts.get("v1"); // 'valueOfXSignature' en tu JS
+
+            if (ts == null || v1 == null) {
+                log.warn("Validación de firma fallida: Header x-signature malformado. Faltan 'ts' o 'v1'.");
+                return false;
+            }
+
+            // 3. Crear el template (equivale a 'signatureTemplateParsed')
+            String template = String.format("id:%s;request-id:%s;ts:%s;",
+                    dataId, xRequestId, ts);
+
+            // 4. Calcular el HMAC (equivale a crypto.createHmac)
+            // Esto ya lo hace tu método 'calculateHMAC'
+            String expectedSignature = calculateHMAC(template, webhookSecret);
+
+            // 5. Comparar las firmas (equivale a valueOfXSignature == cyphedSignature)
+            // Usamos MessageDigest.isEqual para una comparación segura (evita timing attacks)
+            boolean isValid = MessageDigest.isEqual(
+                    v1.getBytes(StandardCharsets.UTF_8),
+                    expectedSignature.getBytes(StandardCharsets.UTF_8)
+            );
+
+            if (!isValid) {
+                log.warn("¡Validación de firma INCORRECTA! Esperado: {}, Recibido: {}", expectedSignature, v1);
+            } else {
+                log.debug("Validación de firma exitosa para id: {}", dataId);
+            }
+
+            return isValid;
+
+        } catch (Exception e) {
+            log.error("Error fatal validando firma: {}", e.getMessage(), e);
+            return false; // Ante cualquier error, rechazar la firma
+        }
     }
+
 
     /**
      * Verifica si el timestamp del webhook no está expirado

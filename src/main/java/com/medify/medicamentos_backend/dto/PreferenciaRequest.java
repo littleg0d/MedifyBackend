@@ -12,9 +12,7 @@ public class PreferenciaRequest {
     @NotBlank(message = "El nombre comercial es requerido")
     private String nombreComercial;
 
-    @NotNull(message = "El precio es requerido")
-    @DecimalMin(value = "0.01", message = "El precio debe ser mayor a 0")
-    private Double precio;
+
 
     @NotBlank(message = "El ID de receta es requerido")
     private String recetaId;
@@ -45,7 +43,6 @@ public class PreferenciaRequest {
 
     public PreferenciaRequest(String nombreComercial, Double precio, String recetaId) {
         this.nombreComercial = nombreComercial;
-        this.precio = precio;
         this.recetaId = recetaId;
     }
 
@@ -58,13 +55,6 @@ public class PreferenciaRequest {
         this.nombreComercial = nombreComercial;
     }
 
-    public Double getPrecio() {
-        return precio;
-    }
-
-    public void setPrecio(Double precio) {
-        this.precio = precio;
-    }
 
     public String getRecetaId() {
         return recetaId;

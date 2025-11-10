@@ -67,7 +67,7 @@ public class MercadoPagoService {
     /**
      * Crea una preferencia de pago con el pedidoId como external_reference
      */
-    public Preference crearPreferencia(PreferenciaRequest request, String pedidoId)
+    public Preference crearPreferencia(PreferenciaRequest request, String pedidoId, Double precio)
             throws MPException, MPApiException {
 
         PreferenceItemRequest item = PreferenceItemRequest.builder()
@@ -78,7 +78,7 @@ public class MercadoPagoService {
                 .categoryId("health")
                 .quantity(1)
                 .currencyId("ARS")
-                .unitPrice(new BigDecimal(request.getPrecio()))
+                .unitPrice(new BigDecimal(precio)) // 👈 Ahora viene como parámetro
                 .build();
 
         PreferenceBackUrlsRequest backUrls = PreferenceBackUrlsRequest.builder()

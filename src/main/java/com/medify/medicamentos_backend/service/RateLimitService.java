@@ -4,10 +4,9 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -20,20 +19,25 @@ public class RateLimitService {
 
     private static final Logger log = LoggerFactory.getLogger(RateLimitService.class);
 
-    // Cache con expiración automática
     private final Cache<String, AtomicInteger> requestCounts;
     private final int maxRequestsPerMinute;
-    private final int maxRequestsPerHour;
+    private final int webhookMaxRequestsPerMinute;
 
-    public RateLimitService() {
-        this.maxRequestsPerMinute = 10;
-        this.maxRequestsPerHour = 100;
+    public RateLimitService(
+            @Value("${rate-limit.requests-per-minute:10}") int maxRequestsPerMinute,
+            @Value("${rate-limit.webhook.requests-per-minute:5}") int webhookMaxRequestsPerMinute) {
+
+        this.maxRequestsPerMinute = maxRequestsPerMinute;
+        this.webhookMaxRequestsPerMinute = webhookMaxRequestsPerMinute;
 
         // Cache para contadores por minuto
         this.requestCounts = CacheBuilder.newBuilder()
                 .expireAfterWrite(1, TimeUnit.MINUTES)
                 .maximumSize(10000)
                 .build();
+
+        log.info("RateLimitService inicializado - Max requests/min: {}, Webhook max: {}",
+                maxRequestsPerMinute, webhookMaxRequestsPerMinute);
     }
 
     /**
@@ -77,10 +81,9 @@ public class RateLimitService {
     }
 
     /**
-     * Verifica rate limit específico para webhooks
+     * Verifica rate limit específico para webhooks (límite más estricto)
      */
     public boolean allowWebhook(String paymentId) {
-        // Webhooks tienen un límite más estricto (máximo 5 por minuto por payment)
         String key = "webhook:" + paymentId;
 
         AtomicInteger counter = requestCounts.getIfPresent(key);
@@ -91,38 +94,12 @@ public class RateLimitService {
 
         int count = counter.incrementAndGet();
 
-        if (count > 5) {
-            log.error("Rate limit de webhook excedido para payment {}: {} webhooks/min",
-                    paymentId, count);
+        if (count > webhookMaxRequestsPerMinute) {
+            log.error("Rate limit de webhook excedido para payment {}: {} webhooks/min (max: {})",
+                    paymentId, count, webhookMaxRequestsPerMinute);
             return false;
         }
 
         return true;
-    }
-
-    /**
-     * Obtiene el número de requests actual para un identifier
-     */
-    public int getCurrentCount(String identifier, String namespace) {
-        String key = namespace + ":" + identifier;
-        AtomicInteger counter = requestCounts.getIfPresent(key);
-        return counter != null ? counter.get() : 0;
-    }
-
-    /**
-     * Limpia manualmente el contador para un identifier
-     */
-    public void reset(String identifier, String namespace) {
-        String key = namespace + ":" + identifier;
-        requestCounts.invalidate(key);
-        log.info("Rate limit reseteado para {}", key);
-    }
-
-    /**
-     * Limpia todos los contadores (útil para testing)
-     */
-    public void resetAll() {
-        requestCounts.invalidateAll();
-        log.info("Todos los rate limits reseteados");
     }
 }

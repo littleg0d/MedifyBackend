@@ -291,17 +291,6 @@ public class FirebaseService {
                 .getEpochSecond();
 
         Timestamp cutoff = Timestamp.ofTimeSecondsAndNanos(cutoffSeconds, 0);
-
-        try {
-            return buscarConQuery(cutoff, minutes);
-        } catch (Exception e) {
-            log.warn("⚠️ Consulta compuesta falló, aplicando fallback: {}", e.getMessage());
-            extraerURLIndice(e.getMessage());
-            return buscarConFallback(cutoffSeconds, minutes);
-        }
-    }
-
-    private List<String> buscarConQuery(Timestamp cutoff, int minutes) throws Exception {
         var query = db.collection("pedidos")
                 .whereEqualTo("estado", "pendiente_de_pago")
                 .whereLessThan("fechaCreacion", cutoff);
@@ -315,45 +304,7 @@ public class FirebaseService {
         return ids;
     }
 
-    private List<String> buscarConFallback(long cutoffSeconds, int minutes) {
-        try {
-            var query = db.collection("pedidos").whereEqualTo("estado", "pendiente_de_pago");
-            var snapshot = query.get().get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
 
-            List<String> ids = new ArrayList<>();
-            snapshot.getDocuments().forEach(doc -> {
-                try {
-                    Timestamp ts = doc.getTimestamp("fechaCreacion");
-                    if (ts != null && ts.toDate().toInstant().getEpochSecond() < cutoffSeconds) {
-                        ids.add(doc.getId());
-                    } else if (ts == null) {
-                        log.debug("Documento {} sin fechaCreacion, ignorado", doc.getId());
-                    }
-                } catch (Exception ex) {
-                    log.warn("Error procesando doc {}: {}", doc.getId(), ex.getMessage());
-                }
-            });
-
-            log.warn("⚠️ Fallback aplicado: {} pedidos encontrados (filtrado en cliente)", ids.size());
-            return ids;
-        } catch (Exception ex) {
-            log.error("❌ Fallback también falló", ex);
-            throw new RuntimeException("Error buscando pedidos pendientes antiguos", ex);
-        }
-    }
-
-    private void extraerURLIndice(String errorMessage) {
-        try {
-            int idx = errorMessage.indexOf("https://console.firebase.google.com/");
-            if (idx != -1) {
-                int end = errorMessage.indexOf(' ', idx);
-                String url = end == -1 ? errorMessage.substring(idx) : errorMessage.substring(idx, end);
-                log.warn("💡 Crea el índice necesario aquí: {}", url);
-            }
-        } catch (Exception ignore) {
-            // No crítico
-        }
-    }
 
     // ==================================================================================
     // MÉTODOS DE ACTUALIZACIÓN DE ESTADO

@@ -9,7 +9,7 @@ import com.mercadopago.exceptions.MPApiException;
 import com.mercadopago.exceptions.MPException;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.preference.Preference;
-import com.medify.medicamentos_backend.dto.PreferenciaRequest;
+import com.medify.medicamentos_backend.dto.PedidoData;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,11 +17,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 
 @Service
 public class MercadoPagoService {
@@ -53,50 +53,56 @@ public class MercadoPagoService {
     public void init() {
         if (accessToken != null && !accessToken.isBlank()) {
             MercadoPagoConfig.setAccessToken(accessToken);
-            log.info("MercadoPago configurado");
+            log.info("✅ MercadoPago configurado");
         } else {
-            log.warn("MERCADOPAGO_ACCESS_TOKEN no definido.");
+            log.warn("⚠️ MERCADOPAGO_ACCESS_TOKEN no definido.");
         }
     }
-
 
     public boolean isConfigured() {
         return accessToken != null && !accessToken.isBlank();
     }
 
     /**
-     * Crea una preferencia de pago con el pedidoId como external_reference
+     * Crea una preferencia de pago usando los datos completos obtenidos de Firebase
+     * @param datos Datos completos del pedido (usuario, farmacia, cotización)
+     * @param pedidoId ID del pedido ya creado en Firestore
+     * @return Preferencia creada en MercadoPago
      */
-    public Preference crearPreferencia(PreferenciaRequest request, String pedidoId, Double precio)
+    public Preference crearPreferencia(PedidoData datos, String pedidoId)
             throws MPException, MPApiException {
 
+        // Construir el item con los datos de la cotización
         PreferenceItemRequest item = PreferenceItemRequest.builder()
-                .id(request.getRecetaId())
-                .title(request.getNombreComercial())
-                .description(request.getDescripcion())
-                .pictureUrl(request.getImagenUrl())
+                .id(datos.getRecetaId())
+                .title(datos.getNombreComercial()) // Nombre de la farmacia
+                .description(datos.getDescripcion()) // Descripción de la cotización
+                .pictureUrl(datos.getImagenUrl()) // Imagen de la receta
                 .categoryId("health")
                 .quantity(1)
                 .currencyId("ARS")
-                .unitPrice(new BigDecimal(precio)) // 👈 Ahora viene como parámetro
+                .unitPrice(new BigDecimal(datos.getPrecio())) // Precio de la cotización
                 .build();
 
+        // URLs de retorno
         PreferenceBackUrlsRequest backUrls = PreferenceBackUrlsRequest.builder()
                 .success(successUrl)
                 .failure(failureUrl)
                 .pending(pendingUrl)
                 .build();
 
+        // Metadata con todos los IDs relevantes
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put("recetaId", request.getRecetaId());
+        metadata.put("recetaId", datos.getRecetaId());
         metadata.put("pedidoId", pedidoId);
-        if (request.getFarmaciaId() != null) {
-            metadata.put("farmaciaId", request.getFarmaciaId());
-        }
+        metadata.put("farmaciaId", datos.getFarmaciaId());
+        metadata.put("cotizacionId", datos.getCotizacionId());
+        metadata.put("userId", datos.getUserId());
 
         // Establecer expiración 10 minutos a partir de ahora (UTC)
         OffsetDateTime expiration = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(10);
 
+        // Construir la preferencia de forma simple
         PreferenceRequest preferenceRequest = PreferenceRequest.builder()
                 .items(List.of(item))
                 .backUrls(backUrls)
@@ -104,25 +110,37 @@ public class MercadoPagoService {
                 .externalReference(pedidoId)
                 .metadata(metadata)
                 .expirationDateTo(expiration)
+                .statementDescriptor("MEDIFY - " + datos.getNombreComercial())
                 .build();
 
         logPreferenceRequest(preferenceRequest);
 
         try {
             PreferenceClient client = new PreferenceClient();
-            return client.create(preferenceRequest);
+            Preference preferencia = client.create(preferenceRequest);
+
+            log.info("✅ Preferencia creada exitosamente");
+            log.info("   Precio: ${}", datos.getPrecio());
+            log.info("   Usuario: {}", datos.getUserName());
+            log.info("   Farmacia: {}", datos.getNombreComercial());
+
+            return preferencia;
+
         } catch (MPApiException mpEx) {
             logMPApiException(mpEx, pedidoId);
             throw mpEx;
         }
     }
 
+    /**
+     * Verifica el estado de un pago en MercadoPago
+     */
     public Payment verificarPago(String paymentId) throws MPException, MPApiException {
         PaymentClient client = new PaymentClient();
         return client.get(Long.valueOf(paymentId));
     }
 
-    // === Metodos privados de logging ===
+    // === Métodos privados de logging ===
 
     private void logPreferenceRequest(PreferenceRequest request) {
         if (!log.isDebugEnabled()) {
@@ -131,27 +149,26 @@ public class MercadoPagoService {
 
         try {
             String json = objectMapper.writeValueAsString(request);
-            log.debug("Creando preferencia MercadoPago: {}", json);
+            log.debug("📄 Creando preferencia MercadoPago: {}", json);
         } catch (JsonProcessingException e) {
-            log.debug("No se pudo serializar preferenceRequest: {}", e.getMessage());
+            log.debug("⚠️ No se pudo serializar preferenceRequest: {}", e.getMessage());
         }
     }
 
     private void logMPApiException(MPApiException mpEx, String pedidoId) {
-        log.error("MPApiException creando preferencia (pedidoId={}): {}",
+        log.error("❌ MPApiException creando preferencia (pedidoId={}): {}",
                 pedidoId, mpEx.getMessage());
 
-        // Intenta loggear detalles adicionales si estan disponibles
         try {
             int statusCode = mpEx.getStatusCode();
-            log.error("Status code: {}", statusCode);
+            log.error("   Status code: {}", statusCode);
 
             if (mpEx.getApiResponse() != null) {
                 String content = mpEx.getApiResponse().getContent();
-                log.error("Response body: {}", content);
+                log.error("   Response body: {}", content);
             }
         } catch (Exception e) {
-            log.debug("No se pudieron extraer detalles adicionales del error", e);
+            log.debug("⚠️ No se pudieron extraer detalles adicionales del error", e);
         }
     }
 }

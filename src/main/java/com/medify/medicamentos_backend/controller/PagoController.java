@@ -3,6 +3,7 @@ package com.medify.medicamentos_backend.controller;
 import com.mercadopago.exceptions.MPApiException;
 import com.mercadopago.exceptions.MPException;
 import com.mercadopago.resources.preference.Preference;
+import com.medify.medicamentos_backend.dto.PedidoData;
 import com.medify.medicamentos_backend.dto.PreferenciaRequest;
 import com.medify.medicamentos_backend.service.FirebaseService;
 import com.medify.medicamentos_backend.service.MercadoPagoService;
@@ -21,13 +22,13 @@ import java.util.Map;
 
 /**
  * Controlador REST para la gestión de pagos con MercadoPago
+ * Ahora obtiene todos los datos necesarios desde Firebase
  */
 @RestController
 @RequestMapping("/api/pagos")
 public class PagoController {
 
     private static final Logger log = LoggerFactory.getLogger(PagoController.class);
-    private static final long WEBHOOK_MAX_AGE_SECONDS = 300; // 5 minutos
 
     private final MercadoPagoService mercadoPagoService;
     private final FirebaseService firebaseService;
@@ -38,8 +39,7 @@ public class PagoController {
 
     public PagoController(MercadoPagoService mercadoPagoService,
                           FirebaseService firebaseService,
-                          PagoProcessingService pagoProcessingService
-                          ) {
+                          PagoProcessingService pagoProcessingService) {
         this.mercadoPagoService = mercadoPagoService;
         this.firebaseService = firebaseService;
         this.pagoProcessingService = pagoProcessingService;
@@ -47,15 +47,18 @@ public class PagoController {
 
     /**
      * Crea una preferencia de pago en MercadoPago
+     * Obtiene todos los datos necesarios desde Firebase usando solo los IDs
      */
     @PostMapping("/crear-preferencia")
     public ResponseEntity<?> crearPreferencia(@Valid @RequestBody PreferenciaRequest request) {
 
-        log.info("Creando pedido en Firestore para receta: {} y cotizacion: {}", request.getRecetaId(), request.getCotizacionId());
+        log.info("📝 Creando preferencia - Receta: {}, Cotización: {}, Farmacia: {}, Usuario: {}",
+                request.getRecetaId(), request.getCotizacionId(),
+                request.getFarmaciaId(), request.getUserId());
 
         String pedidoId = null;
         try {
-            // ✅ VALIDACION:Verificar que MercadoPago esté configurado
+            // ✅ VALIDACION: Verificar que MercadoPago esté configurado
             if (!mercadoPagoService.isConfigured()) {
                 log.warn("❌ Mercado Pago no configurado");
                 return handlePaymentError("Proveedor de pagos no configurado", HttpStatus.SERVICE_UNAVAILABLE);
@@ -70,95 +73,48 @@ public class PagoController {
                 );
             }
 
-            // ✅ VALIDACION: Verificar que la receta exista y esté en estado válido
-            Map<String, Object> receta = firebaseService.obtenerReceta(request.getRecetaId());
+            // 🔍 OBTENER TODOS LOS DATOS DESDE FIREBASE
+            log.info("🔍 Obteniendo datos completos desde Firebase...");
+            PedidoData datosCompletos;
 
-            if (receta == null) {
-                log.error("❌ Receta no encontrada: {}", request.getRecetaId());
-                return handlePaymentError(
-                        "Receta no encontrada",
-                        HttpStatus.NOT_FOUND
-                );
-            }
-
-            String estadoReceta = (String) receta.get("estado");
-            if (!"farmacias_respondiendo".equals(estadoReceta)) {
-                log.error("❌ Receta en estado inválido: {}. Esperado: 'farmacias_respondiendo'", estadoReceta);
-                return handlePaymentError(
-                        "La receta no está lista para procesar el pago",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
-            log.info("✅ Receta {} validada correctamente (estado: {})", request.getRecetaId(), estadoReceta);
-
-            // ✅ VVALIDACION: Buscar la cotización en Firestore
-            Map<String, Object> cotizacion = firebaseService.obtenerCotizacion(
-                    request.getRecetaId(),
-                    request.getCotizacionId()
-            );
-
-            if (cotizacion == null) {
-                log.error("❌ Cotización no encontrada: {}/{}",
-                        request.getRecetaId(), request.getCotizacionId());
-                return handlePaymentError(
-                        "Cotización no encontrada",
-                        HttpStatus.NOT_FOUND
-                );
-            }
-
-            // ✅ VALIDACION: Verificar que el estado de la cotización sea "cotizado"
-            String estadoCotizacion = (String) cotizacion.get("estado");
-            if (!"cotizado".equals(estadoCotizacion)) {
-                log.error("❌ Cotización en estado inválido: {}. Esperado: 'cotizado'", estadoCotizacion);
-                return handlePaymentError(
-                        "La cotización no está en estado válido para proceder con el pago",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
-            // ✅ VALIDACION: Extraer y validar el precio desde Firestore
-            Double precio = extractPrecio(cotizacion);
-
-            if (precio == null || precio <= 0) {
-                log.error("❌ Precio inválido en cotización: {}", precio);
-                return handlePaymentError(
-                        "Precio inválido en la cotización",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
-            log.info("💰 Precio obtenido de Firestore: ${}", precio);
-
-            // ✅ VALIDACION: Verificar que farmaciaId coincida (seguridad extra)
-            String farmaciaIdCotizacion = (String) cotizacion.get("farmaciaId");
-            if (farmaciaIdCotizacion != null && !farmaciaIdCotizacion.equals(request.getFarmaciaId())) {
-                log.error("❌ FarmaciaId no coincide. Request: {}, Cotización: {}",
-                        request.getFarmaciaId(), farmaciaIdCotizacion);
-                return handlePaymentError(
-                        "La farmacia no coincide con la cotización",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
-            // ✅ TODO VALIDADO: Crear el pedido
             try {
-                pedidoId = firebaseService.crearPedidoConTransaccion(request, precio);
+                datosCompletos = firebaseService.obtenerDatosCompletosParaPedido(
+                        request.getUserId(),
+                        request.getFarmaciaId(),
+                        request.getRecetaId(),
+                        request.getCotizacionId()
+                );
+            } catch (IllegalArgumentException e) {
+                // Error de validación de datos
+                log.error("❌ Error de validación: {}", e.getMessage());
+                return handlePaymentError(e.getMessage(), HttpStatus.BAD_REQUEST);
+            }
+
+            log.info("✅ Datos obtenidos correctamente:");
+            log.info("   Usuario: {} ({})", datosCompletos.getUserName(), datosCompletos.getUserEmail());
+            log.info("   Farmacia: {} ({})", datosCompletos.getNombreComercial(), datosCompletos.getFarmEmail());
+            log.info("   Precio: ${}", datosCompletos.getPrecio());
+
+            // ✅ TODO VALIDADO: Crear el pedido con los datos completos
+            try {
+                pedidoId = firebaseService.crearPedidoConTransaccion(datosCompletos);
             } catch (IllegalStateException e) {
                 // Validación de negocio falló (pedido duplicado o no expirado)
                 log.warn("❌ Validación de pedido falló: {}", e.getMessage());
                 return handlePaymentError(e.getMessage(), HttpStatus.CONFLICT);
             }
+
             log.info("✅ Pedido creado con id: {}", pedidoId);
 
             // ✅ Crear la preferencia de pago en MercadoPago
-            Preference preferencia = mercadoPagoService.crearPreferencia(request, pedidoId, precio);
+            Preference preferencia = mercadoPagoService.crearPreferencia(datosCompletos, pedidoId);
 
             log.info("✅ Preferencia creada: {} - URL: {}", preferencia.getId(), preferencia.getInitPoint());
 
             Map<String, String> response = new HashMap<>();
             response.put("paymentUrl", preferencia.getInitPoint());
             response.put("preferenceId", preferencia.getId());
+            response.put("pedidoId", pedidoId);
 
             return ResponseEntity.ok(response);
 
@@ -173,36 +129,9 @@ public class PagoController {
             return handlePaymentError("Error interno al procesar el pago", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
-    /**
-     * Extrae el precio desde los datos de la cotización
-     * Maneja diferentes formatos posibles
-     */
-    private Double extractPrecio(Map<String, Object> cotizacion) {
-        Object precioObj = cotizacion.get("precio");
 
-        if (precioObj == null) {
-            log.warn("⚠️ Campo 'precio' no encontrado en cotización");
-            return null;
-        }
-
-        if (precioObj instanceof Number) {
-            return ((Number) precioObj).doubleValue();
-        }
-
-        if (precioObj instanceof String) {
-            try {
-                return Double.parseDouble((String) precioObj);
-            } catch (NumberFormatException e) {
-                log.warn("No se pudo convertir precio string: {}", precioObj);
-                return null;
-            }
-        }
-        log.warn("⚠️ Tipo de precio no soportado: {}", precioObj.getClass().getName());
-        return null;
-    }
     /**
      * Recibe notificaciones de MercadoPago sobre cambios en pagos
-     * Valida la firma criptográfica para asegurar autenticidad
      */
     @PostMapping("/webhook")
     public ResponseEntity<String> webhook(
@@ -210,7 +139,7 @@ public class PagoController {
             @RequestHeader(value = "x-signature", required = false) String xSignature,
             @RequestHeader(value = "x-request-id", required = false) String xRequestId) {
 
-        log.info("Webhook recibido: {}", payload);
+        log.info("📨 Webhook recibido: {}", payload);
         log.debug("Headers - x-signature: {}, x-request-id: {}", xSignature, xRequestId);
 
         try {
@@ -218,11 +147,11 @@ public class PagoController {
             return ResponseEntity.ok(procesado ? "processed" : "ignored");
 
         } catch (Exception ex) {
-            log.error("Error procesando webhook: {}", ex.getMessage(), ex);
+            log.error("❌ Error procesando webhook: {}", ex.getMessage(), ex);
             // MercadoPago espera 200 incluso si hay errores para no reintente
             return ResponseEntity.ok("error");
         }
-    };
+    }
 
     /**
      * Health check del servicio de pagos
@@ -239,48 +168,11 @@ public class PagoController {
     // === Métodos privados ===
 
     /**
-     * Extrae el data.id del payload del webhook
-     */
-    private String extractDataId(Map<String, Object> payload) {
-        // 1) payload.data.id
-        Object data = payload.get("data");
-        if (data instanceof Map) {
-            Object id = ((Map<?, ?>) data).get("id");
-            if (id != null) {
-                return id.toString();
-            }
-        }
-
-        // 2) payload.resource (puede ser una URL como https://api.mercadolibre.com/merchant_orders/35392594879)
-        Object resource = payload.get("resource");
-        if (resource instanceof String) {
-            String resStr = (String) resource;
-            // Extraer la última parte después de '/'
-            String[] parts = resStr.split("/");
-            if (parts.length > 0) {
-                String last = parts[parts.length - 1];
-                if (last != null && !last.isBlank()) {
-                    return last;
-                }
-            }
-        }
-
-        // 3) payload.id en la raíz
-        Object rootId = payload.get("id");
-        if (rootId != null) {
-            return rootId.toString();
-        }
-
-        // No se encontró id
-        return null;
-    }
-
-    /**
      * Maneja errores de pago
      */
     private ResponseEntity<?> handlePaymentError(String message, HttpStatus status) {
         if (failureUrl != null && !failureUrl.isBlank()) {
-            log.info("Redirigiendo a failure URL: {}", failureUrl);
+            log.info("🔀 Redirigiendo a failure URL: {}", failureUrl);
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(failureUrl))
                     .build();

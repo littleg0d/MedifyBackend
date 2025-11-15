@@ -1,7 +1,5 @@
 package com.medify.medicamentos_backend.service;
 
-import com.medify.medicamentos_backend.dto.Address;
-import org.springframework.beans.factory.annotation.Value;
 import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
@@ -10,19 +8,19 @@ import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
 import com.google.api.core.ApiFuture;
-import com.medify.medicamentos_backend.dto.PreferenciaRequest;
+import com.medify.medicamentos_backend.dto.PedidoData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Arrays;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Service
 public class FirebaseService {
@@ -43,24 +41,374 @@ public class FirebaseService {
     }
 
     // ==================================================================================
-    // 🔒 CREAR PEDIDO CON TRANSACCIÓN (SOLUCIONA RACE CONDITION)
+    // 🔍 OBTENER DATOS COMPLETOS PARA PEDIDO
     // ==================================================================================
 
     /**
-     * Crea un pedido de forma atómica, verificando dentro de una transacción
-     * que no exista un pedido activo para evitar race conditions.
-     *
-     * @throws IllegalStateException si ya existe un pedido activo y válido
+     * Obtiene todos los datos necesarios para crear un pedido desde Firebase
+     * @throws IllegalArgumentException si algún dato requerido no existe o es inválido
      */
-    public String crearPedidoConTransaccion(PreferenciaRequest req, Double precio) {
+    public PedidoData obtenerDatosCompletosParaPedido(
+            String userId,
+            String farmaciaId,
+            String recetaId,
+            String cotizacionId) {
+
+        log.info("🔍 Obteniendo datos completos - User: {}, Farmacia: {}, Receta: {}, Cotización: {}",
+                userId, farmaciaId, recetaId, cotizacionId);
+
+        PedidoData datos = new PedidoData();
+
+        // 1️⃣ Obtener datos del usuario
+        Map<String, Object> userData = obtenerUsuario(userId);
+        if (userData == null) {
+            throw new IllegalArgumentException("Usuario no encontrado: " + userId);
+        }
+
+        datos.setUserId(userId);
+        datos.setUserName(extractString(userData, "displayName", "userName"));
+        datos.setUserEmail(extractString(userData, "email", "userEmail"));
+        datos.setUserDNI(extractString(userData, "dni", "userDNI"));
+        datos.setUserPhone(extractStringOptional(userData, "phone"));
+
+        // ✅ Dirección del usuario (campo: "address")
+        Map<String, String> userAddress = extractAddressFromUser(userData);
+        if (userAddress == null || userAddress.isEmpty()) {
+            throw new IllegalArgumentException("Dirección del usuario no encontrada");
+        }
+        datos.setUserAddress(userAddress);
+
+        // Obra social del usuario
+        Map<String, String> obraSocial = extractObraSocial(userData, "obraSocial");
+        if (obraSocial == null || obraSocial.isEmpty()) {
+            log.info("ℹ️ Usuario sin obra social configurada");
+            obraSocial = null;
+        }
+        datos.setUserObraSocial(obraSocial);
+
+        log.info("✅ Datos de usuario obtenidos: {}", datos.getUserName());
+
+        // 2️⃣ Obtener datos de la farmacia
+        Map<String, Object> farmData = obtenerFarmacia(farmaciaId);
+        if (farmData == null) {
+            throw new IllegalArgumentException("Farmacia no encontrada: " + farmaciaId);
+        }
+
+        datos.setFarmaciaId(farmaciaId);
+        datos.setNombreComercial(extractString(farmData, "nombreComercial", "nombreComercial"));
+        datos.setFarmEmail(extractString(farmData, "email", "farmEmail"));
+        datos.setFarmPhone(extractString(farmData, "telefono", "farmPhone"));
+        datos.setHorario(extractStringOptional(farmData, "horario"));
+
+        // ✅ Dirección de la farmacia (campo: "direccion" - STRING directo)
+        String farmAddress = extractAddressFromFarmacia(farmData);
+        if (farmAddress == null || farmAddress.isEmpty()) {
+            throw new IllegalArgumentException("Dirección de la farmacia no encontrada");
+        }
+        datos.setFarmAddress(farmAddress);
+
+        log.info("✅ Datos de farmacia obtenidos: {}", datos.getNombreComercial());
+
+        // 3️⃣ Obtener datos de la receta
+        Map<String, Object> recetaData = obtenerReceta(recetaId);
+        if (recetaData == null) {
+            throw new IllegalArgumentException("Receta no encontrada: " + recetaId);
+        }
+
+        // Validar estado de la receta
+        String estadoReceta = (String) recetaData.get("estado");
+        if (!"farmacias_respondiendo".equals(estadoReceta)) {
+            throw new IllegalArgumentException(
+                    "La receta no está en estado válido para procesar el pago. Estado actual: " + estadoReceta
+            );
+        }
+
+        datos.setRecetaId(recetaId);
+        datos.setImagenUrl(extractString(recetaData, "imagenUrl", "imagenUrl"));
+
+        log.info("✅ Datos de receta obtenidos (estado: {}) - Imagen: {}", estadoReceta, datos.getImagenUrl());
+
+        // 4️⃣ Obtener datos de la cotización
+        Map<String, Object> cotizacionData = obtenerCotizacion(recetaId, cotizacionId);
+        if (cotizacionData == null) {
+            throw new IllegalArgumentException("Cotización no encontrada: " + cotizacionId);
+        }
+
+        // Validar estado de la cotización
+        String estadoCotizacion = (String) cotizacionData.get("estado");
+        if (!"cotizado".equals(estadoCotizacion)) {
+            throw new IllegalArgumentException(
+                    "La cotización no está en estado válido. Estado actual: " + estadoCotizacion
+            );
+        }
+
+        datos.setCotizacionId(cotizacionId);
+        datos.setDescripcion(extractStringOptional(cotizacionData, "descripcion"));
+
+        // Extraer y validar precio
+        Double precio = extractPrecio(cotizacionData);
+        if (precio == null || precio <= 0) {
+            throw new IllegalArgumentException("Precio inválido en la cotización: " + precio);
+        }
+        datos.setPrecio(precio);
+
+        log.info("✅ Datos de cotización obtenidos - Precio: ${}", precio);
+
+        return datos;
+    }
+
+    // ==================================================================================
+    // 🔍 MÉTODOS DE CONSULTA AUXILIARES
+    // ==================================================================================
+
+    /**
+     * Obtiene un usuario desde Firestore
+     */
+    private Map<String, Object> obtenerUsuario(String userId) {
         try {
-            // 🔒 Ejecutar TODO dentro de una transacción atómica
+            DocumentSnapshot doc = db.collection("users")
+                    .document(userId)
+                    .get()
+                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+
+            if (!doc.exists()) {
+                log.warn("⚠️ Usuario {} no encontrado", userId);
+                return null;
+            }
+
+            return doc.getData();
+
+        } catch (Exception e) {
+            log.error("❌ Error obteniendo usuario {}", userId, e);
+            throw new RuntimeException("Error al obtener usuario desde Firestore", e);
+        }
+    }
+
+    /**
+     * Obtiene una farmacia desde Firestore
+     */
+    private Map<String, Object> obtenerFarmacia(String farmaciaId) {
+        try {
+            DocumentSnapshot doc = db.collection("farmacias")
+                    .document(farmaciaId)
+                    .get()
+                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+
+            if (!doc.exists()) {
+                log.warn("⚠️ Farmacia {} no encontrada", farmaciaId);
+                return null;
+            }
+
+            return doc.getData();
+
+        } catch (Exception e) {
+            log.error("❌ Error obteniendo farmacia {}", farmaciaId, e);
+            throw new RuntimeException("Error al obtener farmacia desde Firestore", e);
+        }
+    }
+
+    /**
+     * Obtiene una receta desde Firestore
+     */
+    private Map<String, Object> obtenerReceta(String recetaId) {
+        try {
+            DocumentSnapshot doc = db.collection("recetas")
+                    .document(recetaId)
+                    .get()
+                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+
+            if (!doc.exists()) {
+                log.warn("⚠️ Receta {} no encontrada", recetaId);
+                return null;
+            }
+
+            Map<String, Object> data = doc.getData();
+            log.debug("Receta {} obtenida correctamente", recetaId);
+            return data;
+
+        } catch (Exception e) {
+            log.error("❌ Error obteniendo receta {}", recetaId, e);
+            throw new RuntimeException("Error al obtener receta desde Firestore", e);
+        }
+    }
+
+    /**
+     * Obtiene una cotización desde Firestore
+     */
+    private Map<String, Object> obtenerCotizacion(String recetaId, String cotizacionId) {
+        try {
+            DocumentSnapshot doc = db.collection("recetas")
+                    .document(recetaId)
+                    .collection("cotizaciones")
+                    .document(cotizacionId)
+                    .get()
+                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+
+            if (!doc.exists()) {
+                log.warn("⚠️ Cotización {} no encontrada en receta {}", cotizacionId, recetaId);
+                return null;
+            }
+
+            Map<String, Object> data = doc.getData();
+            log.debug("Cotización {} obtenida correctamente", cotizacionId);
+            return data;
+
+        } catch (Exception e) {
+            log.error("❌ Error obteniendo cotización {}/{}", recetaId, cotizacionId, e);
+            throw new RuntimeException("Error al obtener cotización desde Firestore", e);
+        }
+    }
+
+    // ==================================================================================
+    // 🛠️ MÉTODOS AUXILIARES DE EXTRACCIÓN
+    // ==================================================================================
+
+    /**
+     * Extrae un string requerido del Map
+     */
+    private String extractString(Map<String, Object> data, String key, String fieldName) {
+        Object value = data.get(key);
+        if (value == null || value.toString().trim().isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " es requerido");
+        }
+        return value.toString();
+    }
+
+    /**
+     * Extrae un string opcional del Map
+     */
+    private String extractStringOptional(Map<String, Object> data, String key) {
+        Object value = data.get(key);
+        return value != null ? value.toString() : "";
+    }
+
+    /**
+     * Extrae la dirección del USUARIO (campo: "address")
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, String> extractAddressFromUser(Map<String, Object> userData) {
+        Object addressObj = userData.get("address"); // ✅ Usuario usa "address"
+
+        if (addressObj == null) {
+            log.warn("⚠️ Campo 'address' no encontrado en usuario");
+            return null;
+        }
+
+        if (addressObj instanceof Map) {
+            Map<?, ?> rawMap = (Map<?, ?>) addressObj;
+            Map<String, String> address = new HashMap<>();
+
+            address.put("street", getString(rawMap, "street"));
+            address.put("city", getString(rawMap, "city"));
+            address.put("province", getString(rawMap, "province"));
+            address.put("postalCode", getString(rawMap, "postalCode"));
+
+            log.debug("Dirección de usuario extraída: {}, {}",
+                    address.get("street"), address.get("city"));
+            return address;
+        }
+
+        log.warn("⚠️ Campo 'address' no es un Map válido");
+        return null;
+    }
+
+    /**
+     * Extrae la dirección de la FARMACIA (campo: "direccion" como STRING directo)
+     * NO es un Map, es simplemente un String
+     */
+    private String extractAddressFromFarmacia(Map<String, Object> farmData) {
+        Object direccionObj = farmData.get("direccion"); // ✅ Farmacia usa "direccion"
+
+        if (direccionObj == null) {
+            log.warn("⚠️ Campo 'direccion' no encontrado en farmacia");
+            return "";
+        }
+
+        String direccionString = direccionObj.toString().trim();
+
+        if (direccionString.isEmpty()) {
+            log.warn("⚠️ Campo 'direccion' está vacío en farmacia");
+            return "";
+        }
+
+        log.debug("Dirección de farmacia extraída: {}", direccionString);
+        return direccionString;
+    }
+
+    /**
+     * Extrae obra social como Map
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, String> extractObraSocial(Map<String, Object> data, String key) {
+        Object obraObj = data.get(key);
+        if (obraObj == null) {
+            return null;
+        }
+
+        if (obraObj instanceof Map) {
+            Map<?, ?> rawMap = (Map<?, ?>) obraObj;
+            Map<String, String> obra = new HashMap<>();
+
+            obra.put("name", getString(rawMap, "name"));
+            obra.put("number", getString(rawMap, "number"));
+
+            return obra;
+        }
+
+        return null;
+    }
+
+    /**
+     * Obtiene un string de un Map con claves desconocidas
+     */
+    private String getString(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        return value != null ? value.toString() : "";
+    }
+
+    /**
+     * Extrae el precio desde los datos de la cotización
+     */
+    private Double extractPrecio(Map<String, Object> cotizacion) {
+        Object precioObj = cotizacion.get("precio");
+
+        if (precioObj == null) {
+            log.warn("⚠️ Campo 'precio' no encontrado en cotización");
+            return null;
+        }
+
+        if (precioObj instanceof Number) {
+            return ((Number) precioObj).doubleValue();
+        }
+
+        if (precioObj instanceof String) {
+            try {
+                return Double.parseDouble((String) precioObj);
+            } catch (NumberFormatException e) {
+                log.warn("No se pudo convertir precio string: {}", precioObj);
+                return null;
+            }
+        }
+
+        log.warn("⚠️ Tipo de precio no soportado: {}", precioObj.getClass().getName());
+        return null;
+    }
+
+    // ==================================================================================
+    // 🔒 CREAR PEDIDO CON TRANSACCIÓN
+    // ==================================================================================
+
+    /**
+     * Crea un pedido de forma atómica usando los datos completos
+     */
+    public String crearPedidoConTransaccion(PedidoData datos) {
+        try {
             ApiFuture<String> transactionFuture = db.runTransaction(transaction -> {
 
                 // 1️⃣ Buscar pedido activo DENTRO de la transacción
                 Query query = db.collection("pedidos")
-                        .whereEqualTo("userId", req.getUserId())
-                        .whereEqualTo("recetaId", req.getRecetaId())
+                        .whereEqualTo("userId", datos.getUserId())
+                        .whereEqualTo("recetaId", datos.getRecetaId())
                         .whereIn("estado", Arrays.asList(
                                 "pendiente_de_pago",
                                 "pagado",
@@ -81,14 +429,12 @@ public class FirebaseService {
                     log.warn("⚠️ Pedido existente encontrado: {} - Estado: {}",
                             pedidoExistente.getId(), estado);
 
-                    // Si está pagado, siempre rechazar
                     if ("pagado".equals(estado)) {
                         throw new IllegalStateException(
                                 "Ya existe un pedido pagado para esta receta"
                         );
                     }
 
-                    // Si está pendiente, validar tiempo de expiración
                     if (fechaCreacion != null) {
                         long minutosTranscurridos = ChronoUnit.MINUTES.between(
                                 fechaCreacion.toDate().toInstant(),
@@ -110,23 +456,20 @@ public class FirebaseService {
 
                 // 3️⃣ Crear el pedido dentro de la transacción
                 DocumentReference pedidoRef = db.collection("pedidos").document();
-                Map<String, Object> pedidoData = buildPedidoData(req, precio);
+                Map<String, Object> pedidoData = buildPedidoDataFromDto(datos);
                 transaction.set(pedidoRef, pedidoData);
 
                 log.info("✅ Pedido {} creado dentro de transacción", pedidoRef.getId());
                 return pedidoRef.getId();
             });
 
-            // Esperar a que la transacción termine
             String pedidoId = transactionFuture.get(firestoreTimeoutSeconds + 5, TimeUnit.SECONDS);
             log.info("✅ Transacción completada exitosamente - Pedido: {}", pedidoId);
             return pedidoId;
 
         } catch (IllegalStateException e) {
-            // Re-lanzar excepciones de validación de negocio
             log.warn("🚫 Validación de negocio falló: {}", e.getMessage());
             throw e;
-
         } catch (Exception e) {
             log.error("❌ Error en transacción de creación de pedido", e);
             throw new RuntimeException("Error al crear pedido en Firestore", e);
@@ -134,26 +477,37 @@ public class FirebaseService {
     }
 
     /**
-     * Construye el Map con los datos del pedido
+     * Construye el Map con los datos del pedido desde el DTO
+     * Incluye TODOS los datos necesarios para el pedido completo
      */
-    private Map<String, Object> buildPedidoData(PreferenciaRequest req, Double precio) {
+    private Map<String, Object> buildPedidoDataFromDto(PedidoData datos) {
         Map<String, Object> data = new HashMap<>();
-        data.put("recetaId", req.getRecetaId());
-        data.put("farmaciaId", req.getFarmaciaId());
-        data.put("userId", req.getUserId());
 
-        Address direccion = req.getDireccion();
-        Map<String, Object> addressMap = new HashMap<>();
-        addressMap.put("street", direccion.getStreet());
-        addressMap.put("city", direccion.getCity());
-        addressMap.put("province", direccion.getProvince());
-        addressMap.put("postalCode", direccion.getPostalCode());
-        data.put("addressUser", addressMap);
+        // IDs principales
+        data.put("recetaId", datos.getRecetaId());
+        data.put("farmaciaId", datos.getFarmaciaId());
+        data.put("userId", datos.getUserId());
+        data.put("cotizacionId", datos.getCotizacionId());
 
-        data.put("precio", precio);
-        data.put("cotizacionId", req.getCotizacionId());
-        data.put("nombreComercial", req.getNombreComercial());
-        data.put("imagenUrl", req.getImagenUrl());
+        // Datos del usuario
+        data.put("userName", datos.getUserName());
+        data.put("userEmail", datos.getUserEmail());
+        data.put("userDNI", datos.getUserDNI());
+        data.put("userPhone", datos.getUserPhone());
+        data.put("userAddress", datos.getUserAddress());
+        data.put("userObraSocial", datos.getUserObraSocial());
+
+        // Datos de la farmacia
+        data.put("nombreComercial", datos.getNombreComercial());
+        data.put("farmEmail", datos.getFarmEmail());
+        data.put("farmPhone", datos.getFarmPhone());
+        data.put("horario", datos.getHorario());
+        data.put("farmAddress", datos.getFarmAddress()); // ✅ Ya es String directo
+
+        // Datos del pedido
+        data.put("precio", datos.getPrecio());
+        data.put("descripcion", datos.getDescripcion());
+        data.put("imagenUrl", datos.getImagenUrl());
         data.put("estado", "pendiente_de_pago");
         data.put("fechaCreacion", FieldValue.serverTimestamp());
         data.put("fechaPago", null);
@@ -161,15 +515,12 @@ public class FirebaseService {
         return data;
     }
 
+    // ==================================================================================
+    // MÉTODOS DE VALIDACIÓN Y GESTIÓN DE PEDIDOS
+    // ==================================================================================
+
     /**
-     * Verifica si existe un pedido activo para una receta, validando también
-     * el tiempo de expiración (5 minutos por defecto).
-     *
-     * Estados activos:
-     * - "pagado": Siempre bloquea
-     * - "pendiente_de_pago", "pendiente": Solo bloquea si NO ha expirado
-     *
-     * @return true si existe un pedido activo válido, false si no existe o ha expirado
+     * Verifica si existe un pedido activo para una receta
      */
     public boolean existePedidoActivoPorReceta(String recetaId, String userId) {
         try {
@@ -196,13 +547,11 @@ public class FirebaseService {
 
             log.info("🔍 Pedido existente encontrado: {} - Estado: {}", pedido.getId(), estado);
 
-            // Si está pagado, siempre bloquea
             if ("pagado".equals(estado)) {
                 log.info("🔒 Receta bloqueada: pedido ya pagado");
                 return true;
             }
 
-            // Para otros estados, validar tiempo de expiración
             if (fechaCreacion != null) {
                 long minutosTranscurridos = ChronoUnit.MINUTES.between(
                         fechaCreacion.toDate().toInstant(),
@@ -222,69 +571,18 @@ public class FirebaseService {
                 return bloqueado;
             }
 
-            // Si no tiene fecha de creación, permitir (caso raro)
             log.warn("⚠️ Pedido sin fechaCreacion, permitiendo por defecto");
             return false;
 
         } catch (Exception e) {
             log.error("❌ Error verificando pedidos activos para receta {}", recetaId, e);
-            // Fail-closed: en caso de error, bloquear por seguridad
             return true;
         }
     }
 
-    // ==================================================================================
-    // MÉTODOS DE CONSULTA Y ACTUALIZACIÓN
-    // ==================================================================================
-
-    public Map<String, Object> obtenerReceta(String recetaId) {
-        try {
-            DocumentSnapshot doc = db.collection("recetas")
-                    .document(recetaId)
-                    .get()
-                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
-
-            if (!doc.exists()) {
-                log.warn("⚠️ Receta {} no encontrada", recetaId);
-                return null;
-            }
-
-            Map<String, Object> data = doc.getData();
-            log.info("✅ Receta {} obtenida correctamente", recetaId);
-            return data;
-
-        } catch (Exception e) {
-            log.error("❌ Error obteniendo receta {}", recetaId, e);
-            throw new RuntimeException("Error al obtener receta desde Firestore", e);
-        }
-    }
-
-    public Map<String, Object> obtenerCotizacion(String recetaId, String cotizacionId) {
-        try {
-            DocumentSnapshot doc = db.collection("recetas")
-                    .document(recetaId)
-                    .collection("cotizaciones")
-                    .document(cotizacionId)
-                    .get()
-                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
-
-            if (!doc.exists()) {
-                log.warn("⚠️ Cotización {} no encontrada en receta {}", cotizacionId, recetaId);
-                return null;
-            }
-
-            Map<String, Object> data = doc.getData();
-            log.info("✅ Cotización {} obtenida correctamente", cotizacionId);
-            return data;
-
-        } catch (Exception e) {
-            log.error("❌ Error obteniendo cotización {}/{}", recetaId, cotizacionId, e);
-            throw new RuntimeException("Error al obtener cotización desde Firestore", e);
-        }
-    }
-
-
-
+    /**
+     * Busca pedidos pendientes antiguos para limpieza
+     */
     public List<String> buscarPedidosPendientesAntiguos(int minutes) {
         long cutoffSeconds = Instant.now()
                 .minus(Duration.ofMinutes(minutes))
@@ -295,21 +593,27 @@ public class FirebaseService {
                 .whereEqualTo("estado", "pendiente_de_pago")
                 .whereLessThan("fechaCreacion", cutoff);
 
-        var querySnapshot = query.get().get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
-
-        List<String> ids = new ArrayList<>();
-        querySnapshot.getDocuments().forEach(doc -> ids.add(doc.getId()));
-
-        log.info("🔍 Encontrados {} pedidos pendientes de más de {} minutos", ids.size(), minutes);
-        return ids;
+        try {
+            var querySnapshot = query.get().get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+            List<String> ids = new ArrayList<>();
+            querySnapshot.getDocuments().forEach(doc -> ids.add(doc.getId()));
+            return ids;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("Consulta a Firestore interrumpida: {}", e.getMessage());
+            return Collections.emptyList();
+        } catch (ExecutionException e) {
+            log.error("Error en la ejecución de la consulta a Firestore: {}", e.getMessage());
+            return Collections.emptyList();
+        } catch (TimeoutException e) {
+            log.error("Timeout esperando la respuesta de Firestore: {}", e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
-
-
-    // ==================================================================================
-    // MÉTODOS DE ACTUALIZACIÓN DE ESTADO
-    // ==================================================================================
-
+    /**
+     * Marca un pedido como abandonado
+     */
     public void marcarPedidoAbandonado(String pedidoId) {
         try {
             Map<String, Object> updates = new HashMap<>();
@@ -327,6 +631,9 @@ public class FirebaseService {
         }
     }
 
+    /**
+     * Borra un pedido completamente
+     */
     public void borrarPedido(String pedidoId) {
         try {
             db.collection("pedidos").document(pedidoId)
@@ -340,6 +647,9 @@ public class FirebaseService {
         }
     }
 
+    /**
+     * Actualiza campos específicos de un pedido
+     */
     public void actualizarPedido(String pedidoId, Map<String, Object> updates) {
         try {
             db.collection("pedidos").document(pedidoId)
@@ -353,8 +663,9 @@ public class FirebaseService {
         }
     }
 
-
-
+    /**
+     * Marca un pedido como pagado de forma idempotente
+     */
     public boolean marcarPedidoComoPagadoIdempotente(String pedidoId, String paymentId, String status) {
         try {
             Boolean updated = db.runTransaction(transaction -> {

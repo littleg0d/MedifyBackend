@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * Controller para operaciones de recetas
- * Endpoint simplificado: solo recibe userId y file
+ * Endpoint simplificado: recibe userId, addressId y file
  */
 @RestController
 @RequestMapping("/api/recetas")
@@ -28,27 +28,36 @@ public class RecetaController {
     }
 
     /**
-     * ⭐ ENDPOINT ATÓMICO SIMPLIFICADO:
-     * Solo recibe userId y file, obtiene los datos del usuario desde Firebase
+     * ⭐ ENDPOINT ATÓMICO CON MÚLTIPLES DIRECCIONES:
+     * Recibe userId, addressId y file
+     * Obtiene los datos del usuario y la dirección específica desde Firebase
      *
      * Si algo falla, NADA queda guardado (ni Firestore ni Dropbox)
      *
      * @param userId ID del usuario que crea la receta
+     * @param addressId ID de la dirección a usar (desde users/{userId}/addresses/{addressId})
      * @param file Imagen de la receta (obligatorio)
      * @return recetaId, imagenUrl y datos de la receta creada
      */
     @PostMapping("/crear-con-imagen")
     public ResponseEntity<Map<String, Object>> crearRecetaConImagen(
             @RequestParam("userId") String userId,
+            @RequestParam("addressId") String addressId,
             @RequestParam("file") MultipartFile file) {
 
-        log.info("📝 Iniciando creación atómica de receta para usuario: {}", userId);
+        log.info("📝 Iniciando creación atómica de receta - Usuario: {}, Dirección: {}",
+                userId, addressId);
 
         try {
             // Validaciones básicas
             if (userId == null || userId.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("error", "userId es obligatorio"));
+            }
+
+            if (addressId == null || addressId.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "addressId es obligatorio"));
             }
 
             if (file == null || file.isEmpty()) {
@@ -72,8 +81,10 @@ public class RecetaController {
 
             log.info("✅ Imagen válida: {} ({} KB)", file.getOriginalFilename(), file.getSize() / 1024);
 
-            // ⭐ El servicio obtiene los datos del usuario desde Firebase
-            Map<String, Object> resultado = recetaService.crearRecetaConImagenAtomica(userId, file);
+            // ⭐ El servicio obtiene datos del usuario Y la dirección desde Firebase
+            Map<String, Object> resultado = recetaService.crearRecetaConImagenAtomica(
+                    userId, addressId, file
+            );
 
             log.info("✅ Receta creada exitosamente: {}", resultado.get("recetaId"));
             return ResponseEntity.status(HttpStatus.CREATED).body(resultado);

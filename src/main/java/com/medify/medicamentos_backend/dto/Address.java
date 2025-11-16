@@ -1,7 +1,7 @@
 package com.medify.medicamentos_backend.dto;
 
 import jakarta.validation.constraints.NotEmpty;
-
+@Deprecated
 public class Address {
 
     @NotEmpty(message = "street es requerido")

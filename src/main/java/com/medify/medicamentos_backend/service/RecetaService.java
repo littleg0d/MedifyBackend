@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Servicio para operaciones de recetas con transacciones atómicas
+ * Servicio para operaciones de recetas con soporte para múltiples direcciones
  */
 @Service
 public class RecetaService {
@@ -36,42 +36,53 @@ public class RecetaService {
     }
 
     /**
-     * ⭐ MÉTODO ATÓMICO SIMPLIFICADO:
-     * Solo recibe userId y file, obtiene todos los datos del usuario desde Firebase
+     * ⭐ MÉTODO ATÓMICO CON MÚLTIPLES DIRECCIONES:
+     * Recibe userId, addressId y file
+     * Obtiene todos los datos del usuario y la dirección específica desde Firebase
      *
      * FLUJO TRANSACCIONAL:
      * 1. Obtiene datos completos del usuario desde Firebase
-     * 2. Genera ID único para la receta
-     * 3. Sube imagen a Dropbox con ese ID
-     * 4. Crea documento en Firestore con la URL y datos del usuario
-     * 5. Si falla (3) o (4), hace rollback completo
+     * 2. Obtiene la dirección específica desde users/{userId}/addresses/{addressId}
+     * 3. Genera ID único para la receta
+     * 4. Sube imagen a Dropbox con ese ID
+     * 5. Crea documento en Firestore con la URL y datos del usuario
+     * 6. Si falla (4) o (5), hace rollback completo
      *
      * VENTAJAS:
      * - O TODO funciona o NADA queda guardado
      * - No hay recetas huérfanas sin imagen
      * - No hay imágenes huérfanas en Dropbox
      * - Datos siempre consistentes con Firebase
-     * - Frontend más simple (solo envía userId + file)
+     * - Soporta múltiples direcciones por usuario
+     * - La dirección queda como copia estática en la receta
      *
      * @param userId ID del usuario
+     * @param addressId ID de la dirección a usar
      * @param file Imagen de la receta (obligatorio)
      * @return Map con recetaId, imagenUrl, imagenPath y mensaje
      * @throws DbxException si falla Dropbox
      * @throws IOException si hay problema con el archivo
      */
-    public Map<String, Object> crearRecetaConImagenAtomica(String userId, MultipartFile file)
-            throws DbxException, IOException {
+    public Map<String, Object> crearRecetaConImagenAtomica(
+            String userId,
+            String addressId,
+            MultipartFile file) throws DbxException, IOException {
 
-        log.info("🚀 Iniciando creación atómica de receta para usuario: {}", userId);
+        log.info("🚀 Iniciando creación atómica de receta - Usuario: {}, Dirección: {}",
+                userId, addressId);
 
         // ====== VALIDACIONES INICIALES ======
 
         if (!dropboxService.isConfigured()) {
-            throw new IllegalStateException(" ❌❌ DROPBOX NO DISPONIBLE");
+            throw new IllegalStateException("❌ DROPBOX NO DISPONIBLE");
         }
 
         if (userId == null || userId.trim().isEmpty()) {
             throw new IllegalArgumentException("userId es obligatorio");
+        }
+
+        if (addressId == null || addressId.trim().isEmpty()) {
+            throw new IllegalArgumentException("addressId es obligatorio");
         }
 
         if (file == null || file.isEmpty()) {
@@ -80,7 +91,7 @@ public class RecetaService {
 
         // ====== PASO 1: OBTENER DATOS DEL USUARIO DESDE FIREBASE ======
 
-        log.info("🔍 Obteniendo datos del usuario desde Firebase...");
+        log.info("👤 Obteniendo datos del usuario desde Firebase...");
         Map<String, Object> userData = obtenerUsuario(userId);
 
         if (userData == null) {
@@ -93,12 +104,6 @@ public class RecetaService {
         String userDNI = extractString(userData, "dni", "DNI del usuario");
         String userPhone = extractStringOptional(userData, "phone");
 
-        // ✅ Dirección del usuario (campo: "address")
-        Map<String, String> userAddress = extractAddressFromUser(userData);
-        if (userAddress == null || userAddress.isEmpty()) {
-            throw new IllegalArgumentException("El usuario no tiene dirección configurada");
-        }
-
         // Obra social del usuario
         Map<String, String> userObraSocial = extractObraSocial(userData, "obraSocial");
         if (userObraSocial == null || userObraSocial.isEmpty()) {
@@ -107,7 +112,21 @@ public class RecetaService {
 
         log.info("✅ Datos del usuario obtenidos: {} ({})", userName, userEmail);
 
-        // ====== PASO 2: GENERAR ID ÚNICO ======
+        // ====== PASO 2: OBTENER DIRECCIÓN ESPECÍFICA DESDE SUBCOLECCIÓN ======
+
+        log.info("📍 Obteniendo dirección desde subcolección...");
+        Map<String, String> userAddress = obtenerDireccionUsuario(userId, addressId);
+
+        if (userAddress == null || userAddress.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Dirección no encontrada o no pertenece al usuario: " + addressId
+            );
+        }
+
+        log.info("✅ Dirección obtenida: {}, {}",
+                userAddress.get("street"), userAddress.get("city"));
+
+        // ====== PASO 3: GENERAR ID ÚNICO ======
 
         DocumentReference recetaRef = firestore.collection("recetas").document();
         String recetaId = recetaRef.getId();
@@ -119,7 +138,7 @@ public class RecetaService {
         boolean firestoreCreado = false;
 
         try {
-            // ====== PASO 3: SUBIR IMAGEN A DROPBOX ======
+            // ====== PASO 4: SUBIR IMAGEN A DROPBOX ======
 
             log.info("☁️ Subiendo imagen a Dropbox...");
             Map<String, String> resultadoDropbox = dropboxService.subirImagen(file, "recetas");
@@ -129,7 +148,7 @@ public class RecetaService {
 
             log.info("✅ Imagen subida: {}", dropboxPath);
 
-            // ====== PASO 4: CREAR DOCUMENTO EN FIRESTORE ======
+            // ====== PASO 5: CREAR DOCUMENTO EN FIRESTORE ======
 
             log.info("💾 Creando documento en Firestore...");
 
@@ -150,7 +169,7 @@ public class RecetaService {
             // ⭐ Datos del usuario (obtenidos desde Firebase)
             recetaData.put("userName", userName);
             recetaData.put("userEmail", userEmail);
-            recetaData.put("userAddress", userAddress);
+            recetaData.put("userAddress", userAddress); // ⭐ Copia estática de la dirección
             recetaData.put("userDNI", userDNI);
             recetaData.put("userPhone", userPhone);
             recetaData.put("userObraSocial", userObraSocial);
@@ -161,7 +180,7 @@ public class RecetaService {
 
             log.info("✅ Receta {} creada exitosamente en Firestore", recetaId);
 
-            // ====== PASO 5: RETORNAR RESULTADO ======
+            // ====== PASO 6: RETORNAR RESULTADO ======
 
             Map<String, Object> resultado = new HashMap<>();
             resultado.put("recetaId", recetaId);
@@ -215,7 +234,59 @@ public class RecetaService {
     }
 
     // ==================================================================================
-    // 🔍 MÉTODOS AUXILIARES PRIVADOS
+    // 📍 MÉTODO NUEVO: OBTENER DIRECCIÓN DESDE SUBCOLECCIÓN
+    // ==================================================================================
+
+    /**
+     * Obtiene una dirección específica desde la subcolección users/{userId}/addresses/{addressId}
+     * Extrae solo los campos necesarios: street, city, province, postalCode
+     *
+     * @param userId ID del usuario
+     * @param addressId ID de la dirección
+     * @return Map con los 4 campos de dirección, o null si no existe
+     */
+    private Map<String, String> obtenerDireccionUsuario(String userId, String addressId) {
+        try {
+            DocumentSnapshot doc = firestore.collection("users")
+                    .document(userId)
+                    .collection("addresses")
+                    .document(addressId)
+                    .get()
+                    .get(firestoreTimeoutSeconds, TimeUnit.SECONDS);
+
+            if (!doc.exists()) {
+                log.warn("⚠️ Dirección {} no encontrada para usuario {}", addressId, userId);
+                return null;
+            }
+
+            Map<String, Object> addressData = doc.getData();
+            if (addressData == null) {
+                return null;
+            }
+
+            // Extraer solo los 4 campos que necesitamos
+            Map<String, String> address = new HashMap<>();
+            address.put("street", extractString(addressData, "street", "street"));
+            address.put("city", extractString(addressData, "city", "city"));
+            address.put("province", extractString(addressData, "province", "province"));
+            address.put("postalCode", extractString(addressData, "postalCode", "postalCode"));
+
+            log.debug("📍 Dirección extraída: {}, {}, {}, {}",
+                    address.get("street"),
+                    address.get("city"),
+                    address.get("province"),
+                    address.get("postalCode"));
+
+            return address;
+
+        } catch (Exception e) {
+            log.error("❌ Error obteniendo dirección {}/{}", userId, addressId, e);
+            throw new RuntimeException("Error al obtener dirección desde Firestore", e);
+        }
+    }
+
+    // ==================================================================================
+    // 📁 MÉTODOS AUXILIARES PRIVADOS
     // ==================================================================================
 
     /**
@@ -258,36 +329,6 @@ public class RecetaService {
     private String extractStringOptional(Map<String, Object> data, String key) {
         Object value = data.get(key);
         return value != null ? value.toString() : "";
-    }
-
-    /**
-     * Extrae la dirección del USUARIO (campo: "address")
-     */
-    @SuppressWarnings("unchecked")
-    private Map<String, String> extractAddressFromUser(Map<String, Object> userData) {
-        Object addressObj = userData.get("address"); // ✅ Usuario usa "address"
-
-        if (addressObj == null) {
-            log.warn("⚠️ Campo 'address' no encontrado en usuario");
-            return null;
-        }
-
-        if (addressObj instanceof Map) {
-            Map<?, ?> rawMap = (Map<?, ?>) addressObj;
-            Map<String, String> address = new HashMap<>();
-
-            address.put("street", getString(rawMap, "street"));
-            address.put("city", getString(rawMap, "city"));
-            address.put("province", getString(rawMap, "province"));
-            address.put("postalCode", getString(rawMap, "postalCode"));
-
-            log.debug("Dirección de usuario extraída: {}, {}",
-                    address.get("street"), address.get("city"));
-            return address;
-        }
-
-        log.warn("⚠️ Campo 'address' no es un Map válido");
-        return null;
     }
 
     /**

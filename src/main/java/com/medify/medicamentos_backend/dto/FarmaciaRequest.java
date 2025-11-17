@@ -1,4 +1,4 @@
-package com.medify.medicamentosbackend.controller.dto;
+package com.medify.medicamentos_backend.dto;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;

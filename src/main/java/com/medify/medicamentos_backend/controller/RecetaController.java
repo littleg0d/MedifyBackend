@@ -73,7 +73,7 @@ public class RecetaController {
             }
 
             // Validar tamaño (máximo 10MB)
-            long maxSize = 10 * 1024 * 1024; // 10MB
+            long maxSize = 20 * 1024 * 1024; // 10MB
             if (file.getSize() > maxSize) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("error", "La imagen no puede superar 10MB"));

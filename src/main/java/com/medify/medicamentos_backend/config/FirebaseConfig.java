@@ -1,5 +1,5 @@
 package com.medify.medicamentos_backend.config;
-
+import com.google.firebase.auth.FirebaseAuth;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.FirestoreOptions;

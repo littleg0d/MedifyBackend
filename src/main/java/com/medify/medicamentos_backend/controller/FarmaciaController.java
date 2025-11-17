@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory; // 👈 2. Importar LoggerFactory
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import com.google.cloud.firestore.WriteResult;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;

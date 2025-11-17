@@ -113,7 +113,7 @@ public class DropboxService {
             throw new IllegalArgumentException("El archivo está vacío");
         }
 
-        if (file.getSize() > 10 * 1024 * 1024) { // 10MB
+        if (file.getSize() > 20 * 1024 * 1024) { // 10MB
             throw new IllegalArgumentException("El archivo excede el tamaño máximo de 10MB");
         }
 

@@ -1,4 +1,4 @@
-package com.medify.medicamentosbackend.controller;
+package com.medify.medicamentos_backend.controller;
 
 import com.google.api.core.ApiFuture;
 import com.google.cloud.firestore.DocumentReference;
@@ -6,7 +6,7 @@ import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.UserRecord;
-import com.medify.medicamentosbackend.controller.dto.FarmaciaRequest;
+import com.medify.medicamentos_backend.dto..FarmaciaRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

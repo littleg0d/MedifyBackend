@@ -108,7 +108,21 @@ public class FirebaseConfig {
             throw new RuntimeException("Error al inicializar Firestore", e);
         }
     }
-    
+    /**
+ * Bean de FirebaseAuth para manejar la autenticación.
+ */
+@Bean
+public FirebaseAuth firebaseAuth(FirebaseApp firebaseApp) {
+    log.info("🔧 Configurando cliente de FirebaseAuth...");
+    try {
+        FirebaseAuth auth = FirebaseAuth.getInstance(firebaseApp);
+        log.info("✅ FirebaseAuth cliente inicializado correctamente");
+        return auth;
+    } catch (Exception e) {
+        log.error("❌ Error inicializando FirebaseAuth: {}", e.getMessage(), e);
+        throw new RuntimeException("Error al inicializar FirebaseAuth", e);
+    }
+}   
     /**
      * Verifica la conectividad con Firestore de manera no bloqueante.
      */

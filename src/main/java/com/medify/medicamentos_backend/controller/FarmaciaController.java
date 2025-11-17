@@ -64,12 +64,8 @@ public class FarmaciaController {
             data.put("authUid", uid);
             data.put("createdAt", FieldValue.serverTimestamp());
 
-            ApiFuture<DocumentReference> future =
-                    firestore.collection("farmacias").add(data); // ⚠️ OJO: .add() crea ID aleatorio
-            
-            // ⚠️ OJO: Si querés que el ID de Firestore sea el MISMO que el de Auth (uid), 
-            // ⚠️ deberías usar:
-            // firestore.collection("farmacias").document(uid).set(data);
+           ApiFuture<WriteResult> future = 
+        firestore.collection("farmacias").document(uid).set(data);
 
             future.get(); // esperar a que se escriba
 

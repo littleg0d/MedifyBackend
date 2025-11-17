@@ -28,7 +28,7 @@ public class FarmaciaController {
         this.firebaseAuth = firebaseAuth;
     }
 
-    @PostMapping
+   @PostMapping("/crear")
     public ResponseEntity<?> crearFarmacia(@Valid @RequestBody FarmaciaRequest req) {
         try {
             // 1️⃣ Crear usuario en Firebase Auth

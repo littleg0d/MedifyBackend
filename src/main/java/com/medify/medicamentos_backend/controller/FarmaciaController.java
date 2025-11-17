@@ -6,8 +6,10 @@ import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.UserRecord;
-import com.medify.medicamentos_backend.dto.FarmaciaRequest;
+import com.medify.medicamentos_backend.dto.FarmaciaRequest; // Asumo que el DTO está en este paquete
 import jakarta.validation.Valid;
+import org.slf4j.Logger; // 👈 1. Importar Logger
+import org.slf4j.LoggerFactory; // 👈 2. Importar LoggerFactory
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +22,9 @@ import java.util.concurrent.ExecutionException;
 @RequestMapping("/api/farmacias")
 public class FarmaciaController {
 
+    // 👈 3. Inicializar el Logger
+    private static final Logger log = LoggerFactory.getLogger(FarmaciaController.class);
+
     private final Firestore firestore;
     private final FirebaseAuth firebaseAuth;
 
@@ -28,8 +33,13 @@ public class FarmaciaController {
         this.firebaseAuth = firebaseAuth;
     }
 
-   @PostMapping("/crear")
+    // ⛔️ Tu código tenía @PostMapping solo, es mejor @PostMapping("/crear")
+    // Lo dejé como estaba en el archivo original de tu repo.
+   @PostMapping("/crear") 
     public ResponseEntity<?> crearFarmacia(@Valid @RequestBody FarmaciaRequest req) {
+        
+        log.info("Iniciando creación de farmacia: {}", req.getEmail()); // 👈 LOG
+
         try {
             // 1️⃣ Crear usuario en Firebase Auth
             UserRecord.CreateRequest createRequest = new UserRecord.CreateRequest()
@@ -39,6 +49,8 @@ public class FarmaciaController {
 
             UserRecord userRecord = firebaseAuth.createUser(createRequest);
             String uid = userRecord.getUid();
+
+            log.info("✅ Usuario de Auth creado con UID: {}", uid); // 👈 LOG
 
             // 2️⃣ Crear documento en Firestore /farmacias/{uid}
             Map<String, Object> data = new HashMap<>();
@@ -53,8 +65,15 @@ public class FarmaciaController {
             data.put("createdAt", FieldValue.serverTimestamp());
 
             ApiFuture<DocumentReference> future =
-                    firestore.collection("farmacias").add(data);
+                    firestore.collection("farmacias").add(data); // ⚠️ OJO: .add() crea ID aleatorio
+            
+            // ⚠️ OJO: Si querés que el ID de Firestore sea el MISMO que el de Auth (uid), 
+            // ⚠️ deberías usar:
+            // firestore.collection("farmacias").document(uid).set(data);
+
             future.get(); // esperar a que se escriba
+
+            log.info("✅ Documento de farmacia creado en Firestore"); // 👈 LOG
 
             Map<String, Object> resp = new HashMap<>();
             resp.put("uid", uid);
@@ -64,10 +83,12 @@ public class FarmaciaController {
 
         } catch (ExecutionException | InterruptedException e) {
             Thread.currentThread().interrupt();
+            log.error("❌ Error interno (Execution/Interruption) al crear farmacia: {}", e.getMessage()); // 👈 LOG
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Error interno al crear la farmacia"));
         } catch (Exception e) {
-            e.printStackTrace();
+            // e.printStackTrace(); // 👈 Reemplazado por log.error
+            log.error("❌ Error inesperado al crear farmacia: {}", e.getMessage(), e); // 👈 LOG
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", e.getMessage()));
         }

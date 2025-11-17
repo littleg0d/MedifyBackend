@@ -107,7 +107,9 @@ public class RecetaService {
         // Obra social del usuario
         Map<String, String> userObraSocial = extractObraSocial(userData, "obraSocial");
         if (userObraSocial == null || userObraSocial.isEmpty()) {
-            throw new IllegalArgumentException("El usuario no tiene obra social configurada");
+            // Ya no es un error, solo informativo
+            log.info("ℹ️ El usuario {} no tiene obra social configurada. Continuando...", userId);
+            userObraSocial = null; // Asegurarse de que sea null si está vacío o no existe
         }
 
         log.info("✅ Datos del usuario obtenidos: {} ({})", userName, userEmail);
